@@ -1,0 +1,2942 @@
+class DrawingApp {
+    constructor() {
+        this.canvas = document.getElementById('mainCanvas');
+        this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
+        this.canvasContainer = document.getElementById('canvasContainer');
+
+        this.canvasWidth = 1200;
+        this.canvasHeight = 800;
+
+        this.layers = [];
+        this.activeLayerIndex = 0;
+        this.layerCounter = 0;
+
+        this.currentTool = 'brush';
+        this.brushColor = '#000000';
+        this.brushSize = 10;
+        this.brushOpacity = 1;
+
+        this.isDrawing = false;
+        this.lastX = 0;
+        this.lastY = 0;
+
+        this.undoStack = [];
+        this.redoStack = [];
+        this.maxHistory = 50;
+
+        this.shapeStart = null;
+        this.previewCanvas = null;
+        this.previewCtx = null;
+
+        this.cursorCanvas = null;
+        this.cursorCtx = null;
+        this.mouseX = 0;
+        this.mouseY = 0;
+        this.mouseOnCanvas = false;
+
+        this.selectedCommands = [];
+        this.selectedIndices = [];
+        this.selectionBBox = null;
+
+        this.isSelecting = false;
+        this.selectMode = null;
+        this.selectStart = null;
+        this.selectDragOffset = null;
+        this.isRotating = false;
+        this.rotationCenter = null;
+        this.rotationStartAngle = 0;
+
+        this.pathEditMode = false;
+        this.editingPathCmd = null;
+        this.editingPathIndex = -1;
+        this.selectedPointIndex = -1;
+        this.isDraggingPoint = false;
+        this.addPointMode = false;
+        this.hoveredPointIndex = -1;
+        this.hoveredSegmentIndex = -1;
+
+        this.init();
+    }
+
+    init() {
+        this.canvas.width = this.canvasWidth;
+        this.canvas.height = this.canvasHeight;
+
+        this.createPreviewCanvas();
+        this.createCursorOverlay();
+        this.positionPreviewCanvas();
+        this.addLayer('Background');
+
+        this.setupEventListeners();
+        this.updateLayerPanel();
+    }
+
+    createPreviewCanvas() {
+        this.previewCanvas = document.createElement('canvas');
+        this.previewCanvas.width = this.canvasWidth;
+        this.previewCanvas.height = this.canvasHeight;
+        this.previewCanvas.style.cssText = 'position:absolute;pointer-events:none;';
+        this.previewCtx = this.previewCanvas.getContext('2d');
+        this.canvasContainer.appendChild(this.previewCanvas);
+        this.positionPreviewCanvas();
+    }
+
+    createCursorOverlay() {
+        this.cursorCanvas = document.createElement('canvas');
+        this.cursorCanvas.width = this.canvasWidth;
+        this.cursorCanvas.height = this.canvasHeight;
+        this.cursorCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
+        this.cursorCtx = this.cursorCanvas.getContext('2d');
+        this.canvasContainer.style.position = 'relative';
+        this.canvasContainer.appendChild(this.cursorCanvas);
+    }
+
+    positionPreviewCanvas() {
+        const rect = this.canvas.getBoundingClientRect();
+        const containerRect = this.canvasContainer.getBoundingClientRect();
+        const left = rect.left - containerRect.left;
+        const top = rect.top - containerRect.top;
+
+        this.previewCanvas.style.left = left + 'px';
+        this.previewCanvas.style.top = top + 'px';
+        this.previewCanvas.style.width = rect.width + 'px';
+        this.previewCanvas.style.height = rect.height + 'px';
+
+        if (this.cursorCanvas) {
+            this.cursorCanvas.style.left = left + 'px';
+            this.cursorCanvas.style.top = top + 'px';
+            this.cursorCanvas.style.width = rect.width + 'px';
+            this.cursorCanvas.style.height = rect.height + 'px';
+        }
+    }
+
+    setupEventListeners() {
+        this.canvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
+        this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+        this.canvas.addEventListener('mouseup', (e) => this.handleMouseUp(e));
+        this.canvas.addEventListener('mouseleave', (e) => this.handleMouseLeave(e));
+        this.canvas.addEventListener('mouseenter', (e) => this.handleMouseEnter(e));
+
+        document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.setTool(btn.dataset.tool);
+            });
+        });
+
+        document.getElementById('brushSize').addEventListener('input', (e) => {
+            const newSize = parseInt(e.target.value);
+            this.brushSize = newSize;
+            document.getElementById('brushSizeValue').textContent = this.brushSize;
+            this.drawCursor();
+
+            if (this.selectedIndices && this.selectedIndices.length > 0) {
+                this.saveState();
+                const activeLayer = this.layers[this.activeLayerIndex];
+                for (const idx of this.selectedIndices) {
+                    const cmd = activeLayer.vectorCommands[idx];
+                    if (cmd) cmd.size = newSize;
+                }
+                this.redrawActiveLayer();
+            }
+        });
+
+        document.getElementById('brushOpacity').addEventListener('input', (e) => {
+            const newOpacity = parseInt(e.target.value) / 100;
+            this.brushOpacity = newOpacity;
+            document.getElementById('brushOpacityValue').textContent = e.target.value + '%';
+            if (this.selectedIndices && this.selectedIndices.length > 0) {
+                this.saveState();
+                const activeLayer = this.layers[this.activeLayerIndex];
+                for (const idx of this.selectedIndices) {
+                    activeLayer.vectorCommands[idx].opacity = newOpacity;
+                }
+                this.redrawActiveLayer();
+            }
+        });
+
+        document.getElementById('colorPicker').addEventListener('input', (e) => {
+            const newColor = e.target.value;
+            this.brushColor = newColor;
+            if (this.selectedIndices && this.selectedIndices.length > 0) {
+                this.saveState();
+                const activeLayer = this.layers[this.activeLayerIndex];
+                for (const idx of this.selectedIndices) {
+                    activeLayer.vectorCommands[idx].color = newColor;
+                }
+                this.redrawActiveLayer();
+            }
+        });
+
+        document.getElementById('undoBtn').addEventListener('click', () => this.undo());
+        document.getElementById('redoBtn').addEventListener('click', () => this.redo());
+        document.getElementById('openBtn').addEventListener('click', () => document.getElementById('svgFileInput').click());
+        document.getElementById('svgFileInput').addEventListener('change', (e) => this.openSVG(e));
+        document.getElementById('clearLayerBtn').addEventListener('click', () => this.clearActiveLayer());
+        document.getElementById('exportSVGBtn').addEventListener('click', () => this.exportSVG());
+        document.getElementById('exportPNGBtn').addEventListener('click', () => this.exportImage());
+
+        document.getElementById('addLayerBtn').addEventListener('click', () => this.addLayer());
+        document.getElementById('deleteLayerBtn').addEventListener('click', () => this.deleteActiveLayer());
+        document.getElementById('moveUpLayerBtn').addEventListener('click', () => this.moveLayerUp());
+        document.getElementById('moveDownLayerBtn').addEventListener('click', () => this.moveLayerDown());
+        document.getElementById('mergeDownBtn').addEventListener('click', () => this.mergeDown());
+        document.getElementById('renameLayerBtn').addEventListener('click', () => this.renameActiveLayer());
+
+        document.getElementById('layerOpacity').addEventListener('input', (e) => {
+            const opacity = parseInt(e.target.value) / 100;
+            document.getElementById('layerOpacityValue').textContent = e.target.value + '%';
+            this.setLayerOpacity(this.activeLayerIndex, opacity);
+        });
+
+        document.getElementById('layerBlendMode').addEventListener('change', (e) => {
+            this.setLayerBlendMode(this.activeLayerIndex, e.target.value);
+        });
+
+        document.getElementById('pathEditBtn').addEventListener('click', () => this.togglePathEdit());
+        document.getElementById('addPointBtn').addEventListener('click', () => this.toggleAddPointMode());
+        document.getElementById('deletePointBtn').addEventListener('click', () => this.deleteSelectedPoint());
+        document.getElementById('deleteSelectedBtn').addEventListener('click', () => this.deleteSelected());
+
+        document.getElementById('moveToLayerSelect').addEventListener('change', (e) => {
+            const targetIndex = parseInt(e.target.value);
+            if (!isNaN(targetIndex) && targetIndex !== this.activeLayerIndex) {
+                this.moveSelectedToLayer(targetIndex);
+                e.target.value = '';
+            }
+        });
+
+        document.getElementById('centerHorizontalBtn').addEventListener('click', () => this.centerSelectionHorizontal());
+        document.getElementById('centerVerticalBtn').addEventListener('click', () => this.centerSelectionVertical());
+
+        document.addEventListener('keydown', (e) => this.handleKeyboard(e));
+
+        window.addEventListener('resize', () => this.positionPreviewCanvas());
+    }
+
+    getCanvasCoordinates(e) {
+        const rect = this.canvas.getBoundingClientRect();
+        const scaleX = this.canvas.width / rect.width;
+        const scaleY = this.canvas.height / rect.height;
+        return {
+            x: (e.clientX - rect.left) * scaleX,
+            y: (e.clientY - rect.top) * scaleY
+        };
+    }
+
+    handleMouseDown(e) {
+        if (e.button !== 0) return;
+        const coords = this.getCanvasCoordinates(e);
+
+        if (this.pathEditMode) {
+            this.handlePathEditMouseDown(e, coords);
+            return;
+        }
+
+        if (this.currentTool === 'fill') {
+            this.performFloodFill(coords.x, coords.y);
+            return;
+        }
+
+        if (this.currentTool === 'select') {
+            this.handleSelectMouseDown(e, coords);
+            return;
+        }
+
+        this.clearSelection();
+        this.showPathEditControls(false);
+
+        this.isDrawing = true;
+        this.lastX = coords.x;
+        this.lastY = coords.y;
+        const activeLayer = this.layers[this.activeLayerIndex];
+        activeLayer.vectorCommands = activeLayer.vectorCommands || [];
+
+        if (this.currentTool === 'line' || this.currentTool === 'rect' || this.currentTool === 'circle') {
+            this.shapeStart = { x: coords.x, y: coords.y };
+        } else if (this.currentTool === 'brush') {
+            this.saveState();
+            this.currentStroke = {
+                type: this.currentTool,
+                color: this.brushColor,
+                size: this.brushSize,
+                opacity: this.brushOpacity,
+                points: [{ x: coords.x, y: coords.y }]
+            };
+            const ctx = activeLayer.canvas.getContext('2d');
+            ctx.globalAlpha = this.brushOpacity;
+            this.drawBrush(ctx, coords.x, coords.y);
+            ctx.globalAlpha = 1;
+            this.render();
+        }
+    }
+
+
+    handleSelectMouseDown(e, coords) {
+        const activeLayer = this.layers[this.activeLayerIndex];
+        const commands = activeLayer.vectorCommands || [];
+        const hitRadius = 6;
+
+        if (this.isRotating) {
+            this.isRotating = false;
+            return;
+        }
+
+        const rotateHandle = this.getRotateHandle();
+        if (rotateHandle && this.dist(coords.x, coords.y, rotateHandle.x, rotateHandle.y) < hitRadius + 4) {
+            this.isRotating = true;
+            this.rotationCenter = { x: this.selectionBBox.cx, y: this.selectionBBox.cy };
+            this.rotationStartAngle = Math.atan2(coords.y - this.rotationCenter.y, coords.x - this.rotationCenter.x);
+            this.isDrawing = false;
+            return;
+        }
+
+        const resizeHandle = this.getResizeHandleAt(coords.x, coords.y);
+        if (resizeHandle) {
+            this.isSelecting = true;
+            this.selectMode = 'resize';
+            this.selectStart = coords;
+            this.resizeHandle = resizeHandle;
+            this.isDrawing = false;
+            return;
+        }
+
+        if (this.selectionBBox && this.isInBBox(coords.x, coords.y, this.selectionBBox)) {
+            this.isSelecting = true;
+            this.selectMode = 'move';
+            this.selectStart = { x: coords.x, y: coords.y };
+            this.selectDragOffset = { x: coords.x - this.selectionBBox.x, y: coords.y - this.selectionBBox.y };
+            this.isDrawing = false;
+            return;
+        }
+
+        this.saveState();
+
+        const addMode = e.shiftKey;
+        if (!addMode) {
+            this.clearSelection();
+        }
+
+        let hitIndex = -1;
+        for (let i = commands.length - 1; i >= 0; i--) {
+            if (this.hitTestCommand(commands[i], coords.x, coords.y)) {
+                hitIndex = i;
+                break;
+            }
+        }
+
+        if (hitIndex >= 0) {
+            const alreadySelected = this.selectedIndices.includes(hitIndex);
+            if (addMode && alreadySelected) {
+                this.selectedIndices = this.selectedIndices.filter(idx => idx !== hitIndex);
+                this.selectedCommands = commands.filter((_, i) => this.selectedIndices.includes(i));
+            } else if (!alreadySelected) {
+                if (addMode) {
+                    this.selectedIndices.push(hitIndex);
+                } else {
+                    this.selectedIndices = [hitIndex];
+                }
+                this.selectedCommands = commands.filter((_, i) => this.selectedIndices.includes(i));
+            }
+        } else {
+            this.isSelecting = true;
+            this.selectMode = 'marquee';
+            this.selectStart = { x: coords.x, y: coords.y };
+            this.isDrawing = false;
+        }
+
+        this.updateSelectionBBox();
+        this.updateDeleteButton();
+        this.syncColorPickerToSelection();
+        this.syncOpacityToSelection();
+        const hasBrush = this.selectedIndices.some(idx => activeLayer.vectorCommands[idx].type === 'brush');
+        this.showPathEditControls(hasBrush);
+        this.syncSizeToSelection();
+        this.drawSelection();
+    }
+
+    syncSizeToSelection() {
+        if (this.selectedIndices.length === 0) {
+            document.getElementById('sizeToolGroup').style.display = 'flex';
+            document.getElementById('brushSize').disabled = false;
+            return;
+        }
+
+        const activeLayer = this.layers[this.activeLayerIndex];
+        const allFill = this.selectedIndices.every(idx => activeLayer.vectorCommands[idx].type === 'fill');
+
+        if (allFill) {
+            document.getElementById('sizeToolGroup').style.display = 'none';
+        } else {
+            document.getElementById('sizeToolGroup').style.display = 'flex';
+            document.getElementById('brushSize').disabled = false;
+
+            const sizes = new Set();
+            for (const idx of this.selectedIndices) {
+                const cmd = activeLayer.vectorCommands[idx];
+                if (cmd.size) sizes.add(cmd.size);
+            }
+
+            if (sizes.size === 1) {
+                this.brushSize = sizes.values().next().value;
+                document.getElementById('brushSize').value = this.brushSize;
+                document.getElementById('brushSizeValue').textContent = this.brushSize;
+                this.drawCursor();
+            }
+        }
+    }
+
+    syncColorPickerToSelection() {
+        if (this.selectedIndices.length === 0) {
+            return;
+        }
+
+        const activeLayer = this.layers[this.activeLayerIndex];
+        const colors = new Set();
+
+        for (const idx of this.selectedIndices) {
+            const cmd = activeLayer.vectorCommands[idx];
+            if (cmd.color) {
+                colors.add(cmd.color);
+            }
+        }
+
+        if (colors.size === 1) {
+            this.brushColor = colors.values().next().value;
+            document.getElementById('colorPicker').value = this.brushColor;
+        }
+    }
+
+    syncOpacityToSelection() {
+        if (this.selectedIndices.length === 0) {
+            return;
+        }
+
+        const activeLayer = this.layers[this.activeLayerIndex];
+        const opacities = new Set();
+
+        for (const idx of this.selectedIndices) {
+            const cmd = activeLayer.vectorCommands[idx];
+            if (cmd.opacity !== undefined) {
+                opacities.add(cmd.opacity);
+            }
+        }
+
+        if (opacities.size === 1) {
+            const op = opacities.values().next().value;
+            this.brushOpacity = op;
+            const pct = Math.round(op * 100);
+            document.getElementById('brushOpacity').value = pct;
+            document.getElementById('brushOpacityValue').textContent = pct + '%';
+        }
+    }
+
+    handleSelectMouseMove(e, coords) {
+        if (this.isRotating) {
+            const angle = Math.atan2(coords.y - this.rotationCenter.y, coords.x - this.rotationCenter.x);
+            const deltaAngle = angle - this.rotationStartAngle;
+            this.rotationStartAngle = angle;
+            this.rotateSelected(deltaAngle);
+            this.updateSelectionBBox();
+            this.render();
+            this.drawSelection();
+            return;
+        }
+
+        if (!this.isSelecting) return;
+
+        if (this.selectMode === 'move') {
+            const dx = coords.x - this.selectStart.x;
+            const dy = coords.y - this.selectStart.y;
+            this.moveSelected(dx, dy);
+            this.selectStart = { x: coords.x, y: coords.y };
+            this.updateSelectionBBox();
+            this.render();
+            this.drawSelection();
+        } else if (this.selectMode === 'marquee') {
+            const x1 = Math.min(this.selectStart.x, coords.x);
+            const y1 = Math.min(this.selectStart.y, coords.y);
+            const x2 = Math.max(this.selectStart.x, coords.x);
+            const y2 = Math.max(this.selectStart.y, coords.y);
+
+            this.previewCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+            this.previewCtx.strokeStyle = '#4a9eff';
+            this.previewCtx.lineWidth = 1;
+            this.previewCtx.setLineDash([4, 4]);
+            this.previewCtx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+            this.previewCtx.setLineDash([]);
+        } else if (this.selectMode === 'resize') {
+            this.resizeSelected(coords);
+            this.updateSelectionBBox();
+            this.render();
+            this.drawSelection();
+        }
+    }
+
+    handleSelectMouseUp(e) {
+        if (this.isRotating) {
+            this.isRotating = false;
+            return;
+        }
+
+        if (!this.isSelecting) return;
+        this.isSelecting = false;
+
+        if (this.selectMode === 'marquee') {
+            const coords = this.getCanvasCoordinates(e);
+            const x1 = Math.min(this.selectStart.x, coords.x);
+            const y1 = Math.min(this.selectStart.y, coords.y);
+            const x2 = Math.max(this.selectStart.x, coords.x);
+            const y2 = Math.max(this.selectStart.y, coords.y);
+
+            if (x2 - x1 > 2 && y2 - y1 > 2) {
+                this.clearSelection();
+                const activeLayer = this.layers[this.activeLayerIndex];
+                const commands = activeLayer.vectorCommands || [];
+                for (let i = 0; i < commands.length; i++) {
+                    if (this.commandInRect(commands[i], x1, y1, x2, y2)) {
+                        this.selectedIndices.push(i);
+                        this.selectedCommands.push(commands[i]);
+                    }
+                }
+                this.updateSelectionBBox();
+                this.updateDeleteButton();
+                this.syncColorPickerToSelection();
+                this.syncOpacityToSelection();
+                this.syncSizeToSelection();
+                this.drawSelection();
+            }
+            this.previewCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+        } else if (this.selectMode === 'move' || this.selectMode === 'resize') {
+            this.redoStack = [];
+        }
+
+        this.selectMode = null;
+        this.resizeHandle = null;
+    }
+
+    handleMouseMove(e) {
+        const coords = this.getCanvasCoordinates(e);
+        this.mouseX = coords.x;
+        this.mouseY = coords.y;
+
+        if (this.pathEditMode) {
+            this.handlePathEditMouseMove(e, coords);
+            return;
+        }
+
+        if (this.currentTool === 'select') {
+            this.handleSelectMouseMove(e, coords);
+            return;
+        }
+
+        if (!this.isDrawing) {
+            this.drawCursor();
+            return;
+        }
+
+        if (this.currentTool === 'brush') {
+            const activeLayer = this.layers[this.activeLayerIndex];
+            const ctx = activeLayer.canvas.getContext('2d');
+            ctx.globalAlpha = this.brushOpacity;
+
+            this.interpolateBrush(ctx, this.lastX, this.lastY, coords.x, coords.y);
+
+            if (this.currentStroke) {
+                this.currentStroke.points.push({ x: coords.x, y: coords.y });
+            }
+
+            ctx.globalAlpha = 1;
+            this.lastX = coords.x;
+            this.lastY = coords.y;
+            this.render();
+        } else if (this.currentTool === 'line' || this.currentTool === 'rect' || this.currentTool === 'circle') {
+            this.previewCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+            this.drawShape(this.previewCtx, this.shapeStart.x, this.shapeStart.y, coords.x, coords.y);
+        }
+    }
+
+    handleMouseUp(e) {
+        if (this.pathEditMode) {
+            this.handlePathEditMouseUp(e);
+            return;
+        }
+
+        if (this.currentTool === 'select') {
+            this.handleSelectMouseUp(e);
+            return;
+        }
+
+        if (!this.isDrawing) return;
+
+        const activeLayer = this.layers[this.activeLayerIndex];
+
+        if (this.currentTool === 'line' || this.currentTool === 'rect' || this.currentTool === 'circle') {
+            const coords = this.getCanvasCoordinates(e);
+            this.saveState();
+            const ctx = activeLayer.canvas.getContext('2d');
+            ctx.globalAlpha = this.brushOpacity;
+            this.drawShape(ctx, this.shapeStart.x, this.shapeStart.y, coords.x, coords.y);
+            ctx.globalAlpha = 1;
+            this.previewCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+
+            activeLayer.vectorCommands.push({
+                type: this.currentTool,
+                color: this.brushColor,
+                size: this.brushSize,
+                opacity: this.brushOpacity,
+                x1: this.shapeStart.x,
+                y1: this.shapeStart.y,
+                x2: coords.x,
+                y2: coords.y
+            });
+
+            this.shapeStart = null;
+        }
+
+        if (this.currentStroke && this.currentStroke.points.length > 0) {
+            activeLayer.vectorCommands.push(this.currentStroke);
+        }
+
+        this.currentStroke = null;
+        this.isDrawing = false;
+
+        if (this.currentTool === 'brush') {
+            this.redrawActiveLayer();
+        } else {
+            this.render();
+        }
+    }
+
+    handleMouseEnter(e) {
+        this.mouseOnCanvas = true;
+        const coords = this.getCanvasCoordinates(e);
+        this.mouseX = coords.x;
+        this.mouseY = coords.y;
+        this.drawCursor();
+    }
+
+    handleMouseLeave(e) {
+        this.mouseOnCanvas = false;
+        if (!this.selectionBBox || this.selectedIndices.length === 0) {
+            this.cursorCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+        }
+    }
+
+    drawBrush(ctx, x, y) {
+        ctx.globalCompositeOperation = 'source-over';
+
+        const radius = this.brushSize / 2;
+        ctx.fillStyle = this.brushColor;
+
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.globalCompositeOperation = 'source-over';
+    }
+
+    interpolateBrush(ctx, x1, y1, x2, y2) {
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const steps = Math.max(1, Math.floor(distance / (this.brushSize / 4)));
+
+        for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const x = x1 + dx * t;
+            const y = y1 + dy * t;
+            this.drawBrush(ctx, x, y);
+        }
+    }
+
+    drawShape(ctx, x1, y1, x2, y2) {
+        ctx.strokeStyle = this.brushColor;
+        ctx.lineWidth = this.brushSize;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        if (this.currentTool === 'line') {
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+        } else if (this.currentTool === 'rect') {
+            const width = x2 - x1;
+            const height = y2 - y1;
+            ctx.beginPath();
+            ctx.rect(x1, y1, width, height);
+            ctx.stroke();
+        } else if (this.currentTool === 'circle') {
+            const radiusX = Math.abs(x2 - x1) / 2;
+            const radiusY = Math.abs(y2 - y1) / 2;
+            const centerX = x1 + (x2 - x1) / 2;
+            const centerY = y1 + (y2 - y1) / 2;
+            ctx.beginPath();
+            ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+    }
+
+    pickColor(x, y) {
+        const pixel = this.ctx.getImageData(x, y, 1, 1).data;
+        const hex = '#' + [pixel[0], pixel[1], pixel[2]].map(v => v.toString(16).padStart(2, '0')).join('');
+        this.brushColor = hex;
+        document.getElementById('colorPicker').value = hex;
+    }
+
+    setTool(tool) {
+        this.currentTool = tool;
+        document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.tool === tool);
+        });
+        this.canvas.style.cursor = tool === 'select' ? 'copy' : 'crosshair';
+        if (tool !== 'select') {
+            this.clearSelection();
+        }
+        const sizeGroup = document.getElementById('sizeToolGroup');
+        if (sizeGroup) {
+            const showSize = ['brush', 'line', 'rect', 'circle'].includes(tool);
+            sizeGroup.style.display = showSize ? 'flex' : 'none';
+        }
+        if (this.mouseOnCanvas) {
+            this.drawCursor();
+        }
+    }
+
+    drawCursor() {
+        this.cursorCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+
+        if (this.currentTool === 'select') {
+            this.drawSelection();
+            return;
+        }
+
+        if (!this.mouseOnCanvas) return;
+
+        if (this.currentTool === 'brush') {
+            const radius = this.brushSize / 2;
+            this.cursorCtx.strokeStyle = '#000000';
+            this.cursorCtx.lineWidth = 1;
+            this.cursorCtx.beginPath();
+            this.cursorCtx.arc(this.mouseX, this.mouseY, radius, 0, Math.PI * 2);
+            this.cursorCtx.stroke();
+            this.cursorCtx.strokeStyle = '#808080';
+            this.cursorCtx.beginPath();
+            this.cursorCtx.moveTo(this.mouseX - 5, this.mouseY);
+            this.cursorCtx.lineTo(this.mouseX + 5, this.mouseY);
+            this.cursorCtx.moveTo(this.mouseX, this.mouseY - 5);
+            this.cursorCtx.lineTo(this.mouseX, this.mouseY + 5);
+            this.cursorCtx.stroke();
+        } else if (this.currentTool === 'fill') {
+            this.cursorCtx.strokeStyle = this.brushColor;
+            this.cursorCtx.lineWidth = 2;
+            this.cursorCtx.beginPath();
+            this.cursorCtx.arc(this.mouseX, this.mouseY, 10, 0, Math.PI * 2);
+            this.cursorCtx.stroke();
+            this.cursorCtx.fillStyle = this.brushColor;
+            this.cursorCtx.globalAlpha = 0.5;
+            this.cursorCtx.beginPath();
+            this.cursorCtx.arc(this.mouseX, this.mouseY, 10, 0, Math.PI * 2);
+            this.cursorCtx.fill();
+            this.cursorCtx.globalAlpha = 1;
+        }
+    }
+
+    clearSelection() {
+        this.selectedCommands = [];
+        this.selectedIndices = [];
+        this.selectionBBox = null;
+        this.isSelecting = false;
+        this.isRotating = false;
+        this.selectMode = null;
+        this.resizeHandle = null;
+        this.cursorCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+        this.previewCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+        this.updateDeleteButton();
+    }
+
+    updateDeleteButton() {
+        const deleteBtn = document.getElementById('deleteSelectedBtn');
+        const moveSelect = document.getElementById('moveToLayerSelect');
+        const centerHBtn = document.getElementById('centerHorizontalBtn');
+        const centerVBtn = document.getElementById('centerVerticalBtn');
+        const visible = this.selectedIndices.length > 0;
+
+        if (deleteBtn) deleteBtn.style.display = visible ? 'flex' : 'none';
+        if (moveSelect) moveSelect.style.display = visible ? 'inline-block' : 'none';
+        if (centerHBtn) centerHBtn.style.display = visible ? 'flex' : 'none';
+        if (centerVBtn) centerVBtn.style.display = visible ? 'flex' : 'none';
+
+        if (visible && moveSelect) {
+            moveSelect.innerHTML = '<option value="">Move to...</option>';
+            this.layers.forEach((layer, i) => {
+                if (i !== this.activeLayerIndex) {
+                    const opt = document.createElement('option');
+                    opt.value = i;
+                    opt.textContent = layer.name;
+                    moveSelect.appendChild(opt);
+                }
+            });
+            moveSelect.value = '';
+        }
+    }
+
+    drawSelection() {
+        this.cursorCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+
+        if (this.pathEditMode) {
+            this.drawPathEditPoints();
+            return;
+        }
+
+        if (!this.selectionBBox || this.selectedIndices.length === 0) return;
+
+        const bbox = this.selectionBBox;
+        const handleSize = 8;
+
+        this.cursorCtx.strokeStyle = '#4a9eff';
+        this.cursorCtx.lineWidth = 1;
+        this.cursorCtx.setLineDash([4, 3]);
+        this.cursorCtx.strokeRect(bbox.x, bbox.y, bbox.w, bbox.h);
+        this.cursorCtx.setLineDash([]);
+
+        const corners = [
+            { x: bbox.x, y: bbox.y },
+            { x: bbox.x + bbox.w / 2, y: bbox.y },
+            { x: bbox.x + bbox.w, y: bbox.y },
+            { x: bbox.x, y: bbox.y + bbox.h / 2 },
+            { x: bbox.x + bbox.w, y: bbox.y + bbox.h / 2 },
+            { x: bbox.x, y: bbox.y + bbox.h },
+            { x: bbox.x + bbox.w / 2, y: bbox.y + bbox.h },
+            { x: bbox.x + bbox.w, y: bbox.y + bbox.h }
+        ];
+
+        this.cursorCtx.fillStyle = '#ffffff';
+        this.cursorCtx.strokeStyle = '#4a9eff';
+        this.cursorCtx.lineWidth = 1.5;
+        corners.forEach(c => {
+            this.cursorCtx.beginPath();
+            this.cursorCtx.fillRect(c.x - handleSize / 2, c.y - handleSize / 2, handleSize, handleSize);
+            this.cursorCtx.strokeRect(c.x - handleSize / 2, c.y - handleSize / 2, handleSize, handleSize);
+        });
+
+        const rotateHandle = this.getRotateHandle();
+        this.cursorCtx.beginPath();
+        this.cursorCtx.strokeStyle = '#4a9eff';
+        this.cursorCtx.moveTo(bbox.cx, bbox.y);
+        this.cursorCtx.lineTo(rotateHandle.x, rotateHandle.y);
+        this.cursorCtx.stroke();
+
+        this.cursorCtx.beginPath();
+        this.cursorCtx.fillStyle = '#4a9eff';
+        this.cursorCtx.arc(rotateHandle.x, rotateHandle.y, handleSize, 0, Math.PI * 2);
+        this.cursorCtx.fill();
+        this.cursorCtx.fillStyle = '#ffffff';
+        this.cursorCtx.font = '10px sans-serif';
+        this.cursorCtx.textAlign = 'center';
+        this.cursorCtx.textBaseline = 'middle';
+        this.cursorCtx.fillText('\u21BB', rotateHandle.x, rotateHandle.y);
+    }
+
+    getRotateHandle() {
+        if (!this.selectionBBox) return null;
+        const bbox = this.selectionBBox;
+        return { x: bbox.cx, y: bbox.y - 25 };
+    }
+
+    getResizeHandleAt(mx, my) {
+        if (!this.selectionBBox) return null;
+        const bbox = this.selectionBBox;
+        const handleSize = 8;
+        const handles = [
+            { name: 'tl', x: bbox.x, y: bbox.y },
+            { name: 'tm', x: bbox.x + bbox.w / 2, y: bbox.y },
+            { name: 'tr', x: bbox.x + bbox.w, y: bbox.y },
+            { name: 'ml', x: bbox.x, y: bbox.y + bbox.h / 2 },
+            { name: 'mr', x: bbox.x + bbox.w, y: bbox.y + bbox.h / 2 },
+            { name: 'bl', x: bbox.x, y: bbox.y + bbox.h },
+            { name: 'bm', x: bbox.x + bbox.w / 2, y: bbox.y + bbox.h },
+            { name: 'br', x: bbox.x + bbox.w, y: bbox.y + bbox.h }
+        ];
+
+        for (const h of handles) {
+            if (Math.abs(mx - h.x) < handleSize && Math.abs(my - h.y) < handleSize) {
+                return h.name;
+            }
+        }
+        return null;
+    }
+
+    updateSelectionBBox() {
+        if (this.selectedCommands.length === 0) {
+            this.selectionBBox = null;
+            return;
+        }
+
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+        for (const cmd of this.selectedCommands) {
+            const cmdBBox = this.getCommandBBox(cmd);
+            if (!cmdBBox) continue;
+            minX = Math.min(minX, cmdBBox.minX);
+            minY = Math.min(minY, cmdBBox.minY);
+            maxX = Math.max(maxX, cmdBBox.maxX);
+            maxY = Math.max(maxY, cmdBBox.maxY);
+        }
+
+        if (minX === Infinity) {
+            this.selectionBBox = null;
+            return;
+        }
+
+        const padding = 8;
+        this.selectionBBox = {
+            x: minX - padding,
+            y: minY - padding,
+            w: (maxX - minX) + padding * 2,
+            h: (maxY - minY) + padding * 2,
+            cx: (minX + maxX) / 2,
+            cy: (minY + maxY) / 2
+        };
+    }
+
+    getCommandBBox(cmd) {
+        const margin = cmd.size ? cmd.size / 2 : 2;
+        if (cmd.type === 'brush' || cmd.type === 'fill') {
+            if (cmd.points.length === 0) return null;
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const p of cmd.points) {
+                minX = Math.min(minX, p.x);
+                minY = Math.min(minY, p.y);
+                maxX = Math.max(maxX, p.x);
+                maxY = Math.max(maxY, p.y);
+            }
+            return { minX: minX - margin, minY: minY - margin, maxX: maxX + margin, maxY: maxY + margin };
+        } else if (cmd.type === 'line') {
+            return {
+                minX: Math.min(cmd.x1, cmd.x2) - margin,
+                minY: Math.min(cmd.y1, cmd.y2) - margin,
+                maxX: Math.max(cmd.x1, cmd.x2) + margin,
+                maxY: Math.max(cmd.y1, cmd.y2) + margin
+            };
+        } else if (cmd.type === 'rect') {
+            return {
+                minX: Math.min(cmd.x1, cmd.x2) - margin,
+                minY: Math.min(cmd.y1, cmd.y2) - margin,
+                maxX: Math.max(cmd.x1, cmd.x2) + margin,
+                maxY: Math.max(cmd.y1, cmd.y2) + margin
+            };
+        } else if (cmd.type === 'circle') {
+            const cx = (cmd.x1 + cmd.x2) / 2;
+            const cy = (cmd.y1 + cmd.y2) / 2;
+            const rx = Math.abs(cmd.x2 - cmd.x1) / 2 + margin;
+            const ry = Math.abs(cmd.y2 - cmd.y1) / 2 + margin;
+            return { minX: cx - rx, minY: cy - ry, maxX: cx + rx, maxY: cy + ry };
+        }
+        return null;
+    }
+
+    hitTestCommand(cmd, mx, my) {
+        const hitRadius = Math.max(cmd.size ? cmd.size / 2 : 4, 6);
+        if (cmd.type === 'brush') {
+            for (const p of cmd.points) {
+                if (this.dist(mx, my, p.x, p.y) < hitRadius) return true;
+            }
+            for (let i = 1; i < cmd.points.length; i++) {
+                if (this.distToSegment(mx, my, cmd.points[i - 1].x, cmd.points[i - 1].y, cmd.points[i].x, cmd.points[i].y) < hitRadius) return true;
+            }
+            return false;
+        } else if (cmd.type === 'fill') {
+            for (const p of cmd.points) {
+                if (this.dist(mx, my, p.x, p.y) < hitRadius + 4) return true;
+            }
+            for (let i = 1; i < cmd.points.length; i++) {
+                if (this.distToSegment(mx, my, cmd.points[i - 1].x, cmd.points[i - 1].y, cmd.points[i].x, cmd.points[i].y) < hitRadius + 4) return true;
+            }
+            return this.isPointInPolygon(mx, my, cmd.points);
+        } else if (cmd.type === 'line') {
+            return this.distToSegment(mx, my, cmd.x1, cmd.y1, cmd.x2, cmd.y2) < hitRadius;
+        } else if (cmd.type === 'rect') {
+            const x = Math.min(cmd.x1, cmd.x2);
+            const y = Math.min(cmd.y1, cmd.y2);
+            const w = Math.abs(cmd.x2 - cmd.x1);
+            const h = Math.abs(cmd.y2 - cmd.y1);
+            return this.distToRect(mx, my, x, y, w, h) < hitRadius;
+        } else if (cmd.type === 'circle') {
+            const cx = (cmd.x1 + cmd.x2) / 2;
+            const cy = (cmd.y1 + cmd.y2) / 2;
+            const rx = Math.abs(cmd.x2 - cmd.x1) / 2;
+            const ry = Math.abs(cmd.y2 - cmd.y1) / 2;
+            const dist = Math.sqrt(((mx - cx) / rx) ** 2 + ((my - cy) / ry) ** 2);
+            return Math.abs(dist - 1) < hitRadius / Math.max(rx, ry);
+        }
+        return false;
+    }
+
+    commandInRect(cmd, x1, y1, x2, y2) {
+        const bbox = this.getCommandBBox(cmd);
+        if (!bbox) return false;
+        return bbox.minX >= x1 && bbox.maxX <= x2 && bbox.minY >= y1 && bbox.maxY <= y2;
+    }
+
+    isInBBox(mx, my, bbox) {
+        return mx >= bbox.x && mx <= bbox.x + bbox.w && my >= bbox.y && my <= bbox.y + bbox.h;
+    }
+
+    isPointInPolygon(x, y, points) {
+        let inside = false;
+        for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+            const xi = points[i].x, yi = points[i].y;
+            const xj = points[j].x, yj = points[j].y;
+            const intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+            if (intersect) inside = !inside;
+        }
+        return inside;
+    }
+
+    moveSelected(dx, dy) {
+        const activeLayer = this.layers[this.activeLayerIndex];
+        for (const idx of this.selectedIndices) {
+            const cmd = activeLayer.vectorCommands[idx];
+            if (cmd.type === 'brush' || cmd.type === 'fill') {
+                for (const p of cmd.points) {
+                    p.x += dx;
+                    p.y += dy;
+                }
+            } else {
+                cmd.x1 += dx;
+                cmd.y1 += dy;
+                cmd.x2 += dx;
+                cmd.y2 += dy;
+            }
+        }
+        this.redrawActiveLayer();
+    }
+
+    rotateSelected(angle) {
+        const activeLayer = this.layers[this.activeLayerIndex];
+        const cx = this.selectionBBox.cx;
+        const cy = this.selectionBBox.cy;
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+
+        for (const idx of this.selectedIndices) {
+            const cmd = activeLayer.vectorCommands[idx];
+            if (cmd.type === 'brush' || cmd.type === 'fill') {
+                for (const p of cmd.points) {
+                    const dx = p.x - cx;
+                    const dy = p.y - cy;
+                    p.x = cx + dx * cos - dy * sin;
+                    p.y = cy + dx * sin + dy * cos;
+                }
+            } else {
+                const dx1 = cmd.x1 - cx, dy1 = cmd.y1 - cy;
+                cmd.x1 = cx + dx1 * cos - dy1 * sin;
+                cmd.y1 = cy + dx1 * sin + dy1 * cos;
+                const dx2 = cmd.x2 - cx, dy2 = cmd.y2 - cy;
+                cmd.x2 = cx + dx2 * cos - dy2 * sin;
+                cmd.y2 = cy + dx2 * sin + dy2 * cos;
+            }
+        }
+        this.redrawActiveLayer();
+    }
+
+    resizeSelected(coords) {
+        const activeLayer = this.layers[this.activeLayerIndex];
+        const bbox = this.selectionBBox;
+        const handle = this.resizeHandle;
+
+        let newBBox = { x: bbox.x, y: bbox.y, w: bbox.w, h: bbox.h, cx: bbox.cx, cy: bbox.cy };
+
+        switch (handle) {
+            case 'br': newBBox.w = coords.x - bbox.x; newBBox.h = coords.y - bbox.y; break;
+            case 'bl': newBBox.w = bbox.w + (bbox.x - coords.x); newBBox.x = coords.x; newBBox.h = coords.y - bbox.y; break;
+            case 'tr': newBBox.w = coords.x - bbox.x; newBBox.h = bbox.h + (bbox.y - coords.y); newBBox.y = coords.y; break;
+            case 'tl': newBBox.w = bbox.w + (bbox.x - coords.x); newBBox.h = bbox.h + (bbox.y - coords.y); newBBox.x = coords.x; newBBox.y = coords.y; break;
+            case 'tm': newBBox.h = bbox.h + (bbox.y - coords.y); newBBox.y = coords.y; break;
+            case 'bm': newBBox.h = coords.y - bbox.y; break;
+            case 'ml': newBBox.w = bbox.w + (bbox.x - coords.x); newBBox.x = coords.x; break;
+            case 'mr': newBBox.w = coords.x - bbox.x; break;
+        }
+
+        if (newBBox.w < 10) newBBox.w = 10;
+        if (newBBox.h < 10) newBBox.h = 10;
+
+        const scaleX = newBBox.w / bbox.w;
+        const scaleY = newBBox.h / bbox.h;
+        const transX = newBBox.x - bbox.x;
+        const transY = newBBox.y - bbox.y;
+
+        for (const idx of this.selectedIndices) {
+            const cmd = activeLayer.vectorCommands[idx];
+            if (cmd.type === 'brush' || cmd.type === 'fill') {
+                for (const p of cmd.points) {
+                    p.x = newBBox.x + (p.x - bbox.x) * scaleX;
+                    p.y = newBBox.y + (p.y - bbox.y) * scaleY;
+                }
+            } else {
+                cmd.x1 = newBBox.x + (cmd.x1 - bbox.x) * scaleX;
+                cmd.y1 = newBBox.y + (cmd.y1 - bbox.y) * scaleY;
+                cmd.x2 = newBBox.x + (cmd.x2 - bbox.x) * scaleX;
+                cmd.y2 = newBBox.y + (cmd.y2 - bbox.y) * scaleY;
+            }
+        }
+
+        this.redrawActiveLayer();
+        this.selectionBBox = {
+            x: newBBox.x,
+            y: newBBox.y,
+            w: newBBox.w,
+            h: newBBox.h,
+            cx: newBBox.x + newBBox.w / 2,
+            cy: newBBox.y + newBBox.h / 2
+        };
+    }
+
+    redrawActiveLayer() {
+        const activeLayer = this.layers[this.activeLayerIndex];
+        const ctx = activeLayer.canvas.getContext('2d');
+        ctx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+
+        for (const cmd of activeLayer.vectorCommands || []) {
+            this.redrawCommand(ctx, cmd);
+        }
+
+        this.render();
+    }
+
+    redrawCommand(ctx, cmd) {
+        if (cmd.type === 'brush') {
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.globalAlpha = cmd.opacity || 1;
+            if (cmd.points.length < 2) {
+                ctx.fillStyle = cmd.color;
+                ctx.beginPath();
+                ctx.arc(cmd.points[0].x, cmd.points[0].y, cmd.size / 2, 0, Math.PI * 2);
+                ctx.fill();
+            } else {
+                ctx.strokeStyle = cmd.color;
+                ctx.lineWidth = cmd.size;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.beginPath();
+                ctx.moveTo(cmd.points[0].x, cmd.points[0].y);
+                for (let i = 1; i < cmd.points.length; i++) {
+                    ctx.lineTo(cmd.points[i].x, cmd.points[i].y);
+                }
+                ctx.stroke();
+            }
+            ctx.globalAlpha = 1;
+            ctx.globalCompositeOperation = 'source-over';
+        } else if (cmd.type === 'fill') {
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.globalAlpha = cmd.opacity || 1;
+            ctx.fillStyle = cmd.color;
+            ctx.beginPath();
+            if (cmd.points.length > 0) {
+                ctx.moveTo(cmd.points[0].x, cmd.points[0].y);
+                for (let i = 1; i < cmd.points.length; i++) {
+                    ctx.lineTo(cmd.points[i].x, cmd.points[i].y);
+                }
+                ctx.closePath();
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+            ctx.globalCompositeOperation = 'source-over';
+        } else if (cmd.type === 'line') {
+            ctx.strokeStyle = cmd.color;
+            ctx.lineWidth = cmd.size;
+            ctx.lineCap = 'round';
+            ctx.globalAlpha = cmd.opacity || 1;
+            ctx.beginPath();
+            ctx.moveTo(cmd.x1, cmd.y1);
+            ctx.lineTo(cmd.x2, cmd.y2);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        } else if (cmd.type === 'rect') {
+            ctx.strokeStyle = cmd.color;
+            ctx.lineWidth = cmd.size;
+            ctx.lineJoin = 'round';
+            ctx.globalAlpha = cmd.opacity || 1;
+            ctx.beginPath();
+            ctx.rect(Math.min(cmd.x1, cmd.x2), Math.min(cmd.y1, cmd.y2), Math.abs(cmd.x2 - cmd.x1), Math.abs(cmd.y2 - cmd.y1));
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        } else if (cmd.type === 'circle') {
+            ctx.strokeStyle = cmd.color;
+            ctx.lineWidth = cmd.size;
+            ctx.globalAlpha = cmd.opacity || 1;
+            ctx.beginPath();
+            ctx.ellipse((cmd.x1 + cmd.x2) / 2, (cmd.y1 + cmd.y2) / 2, Math.abs(cmd.x2 - cmd.x1) / 2, Math.abs(cmd.y2 - cmd.y1) / 2, 0, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        } else if (cmd.type === 'fill') {
+            ctx.fillStyle = cmd.color;
+            ctx.fillRect(cmd.x, cmd.y, cmd.w, cmd.h);
+        }
+    }
+
+    dist(x1, y1, x2, y2) {
+        return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+    }
+
+    performFloodFill(x, y) {
+        x = Math.round(x);
+        y = Math.round(y);
+        if (x < 0 || x >= this.canvasWidth || y < 0 || y >= this.canvasHeight) return;
+
+        this.render();
+
+        const imageData = this.ctx.getImageData(0, 0, this.canvasWidth, this.canvasHeight);
+        const data = imageData.data;
+        const idx = (y * this.canvasWidth + x) * 4;
+        const targetR = data[idx], targetG = data[idx + 1], targetB = data[idx + 2], targetA = data[idx + 3];
+
+        const fillColor = this.hexToRgb(this.brushColor);
+        if (targetR === fillColor.r && targetG === fillColor.g && targetB === fillColor.b && targetA === 255) return;
+
+        const tolerance = 32;
+        const visited = new Uint8Array(this.canvasWidth * this.canvasHeight);
+        const fillMask = new Uint8Array(this.canvasWidth * this.canvasHeight);
+        const stack = [];
+
+        const colorMatch = (i) => {
+            return Math.abs(data[i] - targetR) <= tolerance &&
+                   Math.abs(data[i + 1] - targetG) <= tolerance &&
+                   Math.abs(data[i + 2] - targetB) <= tolerance &&
+                   Math.abs(data[i + 3] - targetA) <= tolerance;
+        };
+
+        stack.push(x, y);
+        while (stack.length > 0) {
+            const cy = stack.pop();
+            const cx = stack.pop();
+            if (cx < 0 || cx >= this.canvasWidth || cy < 0 || cy >= this.canvasHeight) continue;
+            const ci = cy * this.canvasWidth + cx;
+            if (visited[ci]) continue;
+            const pi = ci * 4;
+            if (!colorMatch(pi)) continue;
+
+            visited[ci] = 1;
+            fillMask[ci] = 1;
+
+            stack.push(cx + 1, cy);
+            stack.push(cx - 1, cy);
+            stack.push(cx, cy + 1);
+            stack.push(cx, cy - 1);
+        }
+
+        const boundaryPoints = this.expandBoundary(this.extractBoundary(fillMask, x, y), 2);
+        if (boundaryPoints.length < 3) return;
+
+        this.saveState();
+        const activeLayer = this.layers[this.activeLayerIndex];
+        activeLayer.vectorCommands = activeLayer.vectorCommands || [];
+
+        const insertIndex = this.findFillInsertIndex(activeLayer.vectorCommands, boundaryPoints);
+        const fillCmd = {
+            type: 'fill',
+            color: this.brushColor,
+            opacity: this.brushOpacity,
+            points: boundaryPoints
+        };
+        activeLayer.vectorCommands.splice(insertIndex, 0, fillCmd);
+        this.redrawActiveLayer();
+    }
+
+    findFillInsertIndex(commands, boundaryPoints) {
+        const boundaryHitCounts = new Map();
+        const step = Math.max(1, Math.floor(boundaryPoints.length / 200));
+        for (let i = 0; i < boundaryPoints.length; i += step) {
+            const bp = boundaryPoints[i];
+            for (let ci = commands.length - 1; ci >= 0; ci--) {
+                const cmd = commands[ci];
+                if (cmd.type === 'fill') continue;
+                if (this.hitTestCommand(cmd, bp.x, bp.y)) {
+                    boundaryHitCounts.set(ci, (boundaryHitCounts.get(ci) || 0) + 1);
+                    break;
+                }
+            }
+        }
+        if (boundaryHitCounts.size === 0) return commands.length;
+        let minIndex = commands.length;
+        for (const [ci, count] of boundaryHitCounts) {
+            if (count > 0 && ci < minIndex) {
+                minIndex = ci;
+            }
+        }
+        return minIndex;
+    }
+
+    extractBoundary(fillMask, seedX, seedY) {
+        const w = this.canvasWidth, h = this.canvasHeight;
+        const boundary = [];
+        const inFill = (x, y) => x >= 0 && x < w && y >= 0 && y < h && fillMask[y * w + x];
+        const isEdge = (x, y) => {
+            if (!inFill(x, y)) return false;
+            return !inFill(x + 1, y) || !inFill(x - 1, y) || !inFill(x, y + 1) || !inFill(x, y - 1);
+        };
+
+        let sx = -1, sy = -1;
+        for (let y = Math.max(0, seedY - 200); y < Math.min(h, seedY + 200); y++) {
+            let found = false;
+            for (let x = Math.max(0, seedX - 200); x < Math.min(w, seedX + 200); x++) {
+                if (isEdge(x, y)) { sx = x; sy = y; found = true; break; }
+            }
+            if (found) break;
+        }
+        if (sx === -1) return [];
+
+        const dirs = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+        let cx = sx, cy = sy;
+        let prevDir = 0;
+
+        boundary.push({ x: cx, y: cy });
+
+        for (let iter = 0; iter < 50000; iter++) {
+            let found = false;
+            for (let d = 0; d < 8; d++) {
+                const dirIdx = (prevDir + d) % 8;
+                const nx = cx + dirs[dirIdx][0];
+                const ny = cy + dirs[dirIdx][1];
+                if (isEdge(nx, ny)) {
+                    if (nx === sx && ny === sy) {
+                        boundary.push({ x: sx, y: sy });
+                        return this.simplifyBoundary(boundary);
+                    }
+                    prevDir = (dirIdx + 5) % 8;
+                    cx = nx;
+                    cy = ny;
+                    boundary.push({ x: cx, y: cy });
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) break;
+        }
+
+        return this.simplifyBoundary(boundary);
+    }
+
+    simplifyBoundary(points) {
+        if (points.length <= 3) return points;
+        const simplified = [points[0]];
+        let prev = points[0];
+        for (let i = 1; i < points.length - 1; i++) {
+            const curr = points[i];
+            const next = points[i + 1];
+            const dx1 = curr.x - prev.x, dy1 = curr.y - prev.y;
+            const dx2 = next.x - curr.x, dy2 = next.y - curr.y;
+            const cross = dx1 * dy2 - dy1 * dx2;
+            if (Math.abs(cross) > 0.5) {
+                simplified.push(curr);
+                prev = curr;
+            }
+        }
+        simplified.push(points[points.length - 1]);
+        return simplified;
+    }
+
+    expandBoundary(points, offset) {
+        if (points.length < 3) return points;
+        const closed = points[points.length - 1].x === points[0].x && points[points.length - 1].y === points[0].y;
+        const n = closed ? points.length - 1 : points.length;
+        let cx = 0, cy = 0;
+        for (let i = 0; i < n; i++) { cx += points[i].x; cy += points[i].y; }
+        cx /= n;
+        cy /= n;
+        let maxDist = 0;
+        for (let i = 0; i < n; i++) {
+            const d = (points[i].x - cx) ** 2 + (points[i].y - cy) ** 2;
+            if (d > maxDist) maxDist = d;
+        }
+        maxDist = Math.sqrt(maxDist) || 1;
+        const scale = (maxDist + offset) / maxDist;
+        const expanded = [];
+        for (let i = 0; i < n; i++) {
+            expanded.push({
+                x: cx + (points[i].x - cx) * scale,
+                y: cy + (points[i].y - cy) * scale
+            });
+        }
+        expanded.push({ ...expanded[0] });
+        return expanded;
+    }
+
+    hexToRgb(hex) {
+        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+        return result ? {
+            r: parseInt(result[1], 16),
+            g: parseInt(result[2], 16),
+            b: parseInt(result[3], 16)
+        } : { r: 0, g: 0, b: 0 };
+    }
+
+    distToSegment(px, py, x1, y1, x2, y2) {
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const lenSq = dx * dx + dy * dy;
+        if (lenSq === 0) return this.dist(px, py, x1, y1);
+        let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+        t = Math.max(0, Math.min(1, t));
+        return this.dist(px, py, x1 + t * dx, y1 + t * dy);
+    }
+
+    distToRect(px, py, rx, ry, rw, rh) {
+        if (px >= rx && px <= rx + rw && py >= ry && py <= ry + rh) return 0;
+        const cx = Math.max(rx, Math.min(px, rx + rw));
+        const cy = Math.max(ry, Math.min(py, ry + rh));
+        return this.dist(px, py, cx, cy);
+    }
+
+    addLayer(name) {
+        this.clearSelection();
+        this.layerCounter++;
+        const canvas = document.createElement('canvas');
+        canvas.width = this.canvasWidth;
+        canvas.height = this.canvasHeight;
+
+        const layer = {
+            id: this.layerCounter,
+            name: name || `Layer ${this.layerCounter}`,
+            canvas: canvas,
+            opacity: 1,
+            blendMode: 'source-over',
+            visible: true,
+            vectorCommands: []
+        };
+
+        this.layers.unshift(layer);
+        this.activeLayerIndex = 0;
+        this.render();
+        this.updateLayerPanel();
+    }
+
+    deleteActiveLayer() {
+        this.clearSelection();
+        if (this.layers.length <= 1) return;
+
+        this.layers.splice(this.activeLayerIndex, 1);
+        if (this.activeLayerIndex >= this.layers.length) {
+            this.activeLayerIndex = this.layers.length - 1;
+        }
+        this.render();
+        this.updateLayerPanel();
+    }
+
+    moveLayerUp() {
+        if (this.activeLayerIndex <= 0) return;
+
+        const temp = this.layers[this.activeLayerIndex];
+        this.layers[this.activeLayerIndex] = this.layers[this.activeLayerIndex - 1];
+        this.layers[this.activeLayerIndex - 1] = temp;
+        this.activeLayerIndex--;
+        this.render();
+        this.updateLayerPanel();
+    }
+
+    moveLayerDown() {
+        if (this.activeLayerIndex >= this.layers.length - 1) return;
+
+        const temp = this.layers[this.activeLayerIndex];
+        this.layers[this.activeLayerIndex] = this.layers[this.activeLayerIndex + 1];
+        this.layers[this.activeLayerIndex + 1] = temp;
+        this.activeLayerIndex++;
+        this.render();
+        this.updateLayerPanel();
+    }
+
+    mergeDown() {
+        this.clearSelection();
+        if (this.activeLayerIndex >= this.layers.length - 1) return;
+
+        const upperLayer = this.layers[this.activeLayerIndex];
+        const lowerLayer = this.layers[this.activeLayerIndex + 1];
+
+        const ctx = lowerLayer.canvas.getContext('2d');
+        ctx.globalAlpha = upperLayer.opacity;
+        ctx.globalCompositeOperation = upperLayer.blendMode;
+        ctx.drawImage(upperLayer.canvas, 0, 0);
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+
+        lowerLayer.vectorCommands = [...(lowerLayer.vectorCommands || []), ...(upperLayer.vectorCommands || [])];
+
+        this.layers.splice(this.activeLayerIndex, 1);
+        this.render();
+        this.updateLayerPanel();
+    }
+
+    renameActiveLayer() {
+        const layerItems = document.querySelectorAll('.layer-item');
+        const targetItem = layerItems[this.activeLayerIndex];
+        if (!targetItem) return;
+
+        const nameEl = targetItem.querySelector('.layer-name');
+        if (nameEl) {
+            this.editLayerName(this.activeLayerIndex, nameEl);
+        }
+    }
+
+    setLayerOpacity(index, opacity) {
+        this.layers[index].opacity = opacity;
+        this.render();
+    }
+
+    setLayerBlendMode(index, blendMode) {
+        this.layers[index].blendMode = blendMode;
+        this.render();
+    }
+
+    clearActiveLayer() {
+        this.clearSelection();
+        const layer = this.layers[this.activeLayerIndex];
+        const ctx = layer.canvas.getContext('2d');
+        ctx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+        layer.vectorCommands = [];
+        this.render();
+    }
+
+    render() {
+        this.ctx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.fillRect(0, 0, this.canvasWidth, this.canvasHeight);
+
+        for (let i = this.layers.length - 1; i >= 0; i--) {
+            const layer = this.layers[i];
+            if (!layer.visible) continue;
+
+            this.ctx.globalAlpha = layer.opacity;
+            this.ctx.globalCompositeOperation = layer.blendMode;
+            this.ctx.drawImage(layer.canvas, 0, 0);
+        }
+
+        this.ctx.globalAlpha = 1;
+        this.ctx.globalCompositeOperation = 'source-over';
+    }
+
+    saveState() {
+        const state = this.layers.map(layer => {
+            const canvas = document.createElement('canvas');
+            canvas.width = this.canvasWidth;
+            canvas.height = this.canvasHeight;
+            canvas.getContext('2d').drawImage(layer.canvas, 0, 0);
+
+            return {
+                id: layer.id,
+                name: layer.name,
+                imageData: canvas,
+                opacity: layer.opacity,
+                blendMode: layer.blendMode,
+                visible: layer.visible,
+                vectorCommands: JSON.parse(JSON.stringify(layer.vectorCommands || []))
+            };
+        });
+
+        this.undoStack.push({
+            layers: state,
+            activeLayerIndex: this.activeLayerIndex
+        });
+
+        if (this.undoStack.length > this.maxHistory) {
+            this.undoStack.shift();
+        }
+
+        this.redoStack = [];
+        this.updateUndoRedoButtons();
+    }
+
+    undo() {
+        if (this.undoStack.length === 0) return;
+
+        const currentState = this.layers.map(layer => {
+            const canvas = document.createElement('canvas');
+            canvas.width = this.canvasWidth;
+            canvas.height = this.canvasHeight;
+            canvas.getContext('2d').drawImage(layer.canvas, 0, 0);
+
+            return {
+                id: layer.id,
+                name: layer.name,
+                imageData: canvas,
+                opacity: layer.opacity,
+                blendMode: layer.blendMode,
+                visible: layer.visible,
+                vectorCommands: JSON.parse(JSON.stringify(layer.vectorCommands || []))
+            };
+        });
+
+        this.redoStack.push({
+            layers: currentState,
+            activeLayerIndex: this.activeLayerIndex
+        });
+
+        const prevState = this.undoStack.pop();
+        this.restoreState(prevState);
+        this.updateUndoRedoButtons();
+    }
+
+    redo() {
+        if (this.redoStack.length === 0) return;
+
+        const currentState = this.layers.map(layer => {
+            const canvas = document.createElement('canvas');
+            canvas.width = this.canvasWidth;
+            canvas.height = this.canvasHeight;
+            canvas.getContext('2d').drawImage(layer.canvas, 0, 0);
+
+            return {
+                id: layer.id,
+                name: layer.name,
+                imageData: canvas,
+                opacity: layer.opacity,
+                blendMode: layer.blendMode,
+                visible: layer.visible,
+                vectorCommands: JSON.parse(JSON.stringify(layer.vectorCommands || []))
+            };
+        });
+
+        this.undoStack.push({
+            layers: currentState,
+            activeLayerIndex: this.activeLayerIndex
+        });
+
+        const nextState = this.redoStack.pop();
+        this.restoreState(nextState);
+        this.updateUndoRedoButtons();
+    }
+
+    restoreState(state) {
+        this.layers = state.layers.map(s => {
+            const canvas = document.createElement('canvas');
+            canvas.width = this.canvasWidth;
+            canvas.height = this.canvasHeight;
+            canvas.getContext('2d').drawImage(s.imageData, 0, 0);
+
+            return {
+                id: s.id,
+                name: s.name,
+                canvas: canvas,
+                opacity: s.opacity,
+                blendMode: s.blendMode,
+                visible: s.visible,
+                vectorCommands: s.vectorCommands || []
+            };
+        });
+
+        this.activeLayerIndex = state.activeLayerIndex;
+        this.clearSelection();
+        this.render();
+        this.updateLayerPanel();
+    }
+
+    updateUndoRedoButtons() {
+        document.getElementById('undoBtn').style.opacity = this.undoStack.length === 0 ? '0.5' : '1';
+        document.getElementById('redoBtn').style.opacity = this.redoStack.length === 0 ? '0.5' : '1';
+    }
+
+    updateLayerPanel() {
+        const layerList = document.getElementById('layerList');
+        layerList.innerHTML = '';
+
+        this.layers.forEach((layer, index) => {
+            const layerItem = document.createElement('div');
+            layerItem.className = 'layer-item' + (index === this.activeLayerIndex ? ' active' : '');
+            layerItem.addEventListener('click', (e) => {
+                if (!e.target.closest('.layer-visibility') && !e.target.closest('.layer-name-input')) {
+                    this.activeLayerIndex = index;
+                    this.updateLayerPanel();
+                    document.getElementById('layerOpacity').value = Math.round(layer.opacity * 100);
+                    document.getElementById('layerOpacityValue').textContent = Math.round(layer.opacity * 100) + '%';
+                    document.getElementById('layerBlendMode').value = layer.blendMode;
+                }
+            });
+
+            const thumb = document.createElement('div');
+            thumb.className = 'layer-thumb';
+            const thumbCanvas = document.createElement('canvas');
+            thumbCanvas.width = 32;
+            thumbCanvas.height = 32;
+            const thumbCtx = thumbCanvas.getContext('2d');
+            thumbCtx.clearRect(0, 0, 32, 32);
+            thumbCtx.drawImage(layer.canvas, 0, 0, this.canvasWidth, this.canvasHeight, 0, 0, 32, 32);
+            thumb.appendChild(thumbCanvas);
+
+            const info = document.createElement('div');
+            info.className = 'layer-info';
+
+            const name = document.createElement('div');
+            name.className = 'layer-name';
+            name.textContent = layer.name;
+            name.addEventListener('dblclick', (e) => {
+                e.stopPropagation();
+                this.editLayerName(index, name);
+            });
+            info.appendChild(name);
+
+            const visibility = document.createElement('button');
+            visibility.className = 'layer-visibility';
+            visibility.textContent = layer.visible ? '\u{1F441}' : '\u{1F6AB}';
+            visibility.addEventListener('click', (e) => {
+                e.stopPropagation();
+                layer.visible = !layer.visible;
+                this.render();
+                this.updateLayerPanel();
+            });
+
+            layerItem.appendChild(thumb);
+            layerItem.appendChild(info);
+            layerItem.appendChild(visibility);
+            layerList.appendChild(layerItem);
+        });
+
+        document.getElementById('layerOpacity').value = Math.round(this.layers[this.activeLayerIndex].opacity * 100);
+        document.getElementById('layerOpacityValue').textContent = Math.round(this.layers[this.activeLayerIndex].opacity * 100) + '%';
+        document.getElementById('layerBlendMode').value = this.layers[this.activeLayerIndex].blendMode;
+    }
+
+    editLayerName(index, nameElement) {
+        const input = document.createElement('input');
+        input.className = 'layer-name-input';
+        input.value = this.layers[index].name;
+        nameElement.replaceWith(input);
+        input.focus();
+        input.select();
+
+        const saveName = () => {
+            this.layers[index].name = input.value || this.layers[index].name;
+            this.updateLayerPanel();
+        };
+
+        const cancelRename = () => {
+            this.updateLayerPanel();
+        };
+
+        input.addEventListener('blur', saveName);
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') saveName();
+            if (e.key === 'Escape') cancelRename();
+        });
+    }
+
+    exportImage() {
+        const link = document.createElement('a');
+        link.download = 'drawing.png';
+        link.href = this.canvas.toDataURL('image/png');
+        link.click();
+    }
+
+    exportSVG() {
+        const svgParts = [];
+        svgParts.push(`<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" viewBox="0 0 ${this.canvasWidth} ${this.canvasHeight}" width="${this.canvasWidth}" height="${this.canvasHeight}">`);
+        svgParts.push(`  <rect width="${this.canvasWidth}" height="${this.canvasHeight}" fill="#ffffff"/>`);
+
+        for (let li = this.layers.length - 1; li >= 0; li--) {
+            const layer = this.layers[li];
+            if (!layer.visible) continue;
+
+            const commands = layer.vectorCommands || [];
+            const hasVector = commands.some(cmd => ['brush', 'fill', 'line', 'rect', 'circle'].includes(cmd.type));
+
+            const layerLabel = layer.name.replace(/"/g, '&quot;');
+            const layerGroupAttrs = [
+                `id="layer_${layer.id}"`,
+                `inkscape:groupmode="layer"`,
+                `inkscape:label="${layerLabel}"`,
+                `opacity="${layer.opacity}"`,
+                `style="mix-blend-mode: ${this.getCSSBlendMode(layer.blendMode)}"`
+            ].join(' ');
+
+            svgParts.push(`  <g ${layerGroupAttrs}>`);
+
+            if (hasVector) {
+                for (const cmd of commands) {
+                    if (cmd.type === 'brush') {
+                        if (cmd.points.length < 2) {
+                            svgParts.push(`    <circle cx="${cmd.points[0].x.toFixed(2)}" cy="${cmd.points[0].y.toFixed(2)}" r="${cmd.size / 2}" fill="${cmd.color}" opacity="${cmd.opacity}"/>`);
+                        } else {
+                            let d = `M ${cmd.points[0].x.toFixed(2)} ${cmd.points[0].y.toFixed(2)}`;
+                            for (let i = 1; i < cmd.points.length; i++) {
+                                d += ` L ${cmd.points[i].x.toFixed(2)} ${cmd.points[i].y.toFixed(2)}`;
+                            }
+                            svgParts.push(`    <path d="${d}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="${cmd.opacity}"/>`);
+                        }
+                    } else if (cmd.type === 'fill') {
+                        let d = `M ${cmd.points[0].x.toFixed(2)} ${cmd.points[0].y.toFixed(2)}`;
+                        for (let i = 1; i < cmd.points.length; i++) {
+                            d += ` L ${cmd.points[i].x.toFixed(2)} ${cmd.points[i].y.toFixed(2)}`;
+                        }
+                        d += ' Z';
+                        svgParts.push(`    <path d="${d}" fill="${cmd.color}" stroke="none" opacity="${cmd.opacity}"/>`);
+                    } else if (cmd.type === 'line') {
+                        svgParts.push(`    <line x1="${cmd.x1.toFixed(2)}" y1="${cmd.y1.toFixed(2)}" x2="${cmd.x2.toFixed(2)}" y2="${cmd.y2.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="round" opacity="${cmd.opacity}"/>`);
+                    } else if (cmd.type === 'rect') {
+                        const x = Math.min(cmd.x1, cmd.x2);
+                        const y = Math.min(cmd.y1, cmd.y2);
+                        const w = Math.abs(cmd.x2 - cmd.x1);
+                        const h = Math.abs(cmd.y2 - cmd.y1);
+                        svgParts.push(`    <rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${w.toFixed(2)}" height="${h.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" fill="none" stroke-linejoin="round" opacity="${cmd.opacity}"/>`);
+                    } else if (cmd.type === 'circle') {
+                        const cx = (cmd.x1 + cmd.x2) / 2;
+                        const cy = (cmd.y1 + cmd.y2) / 2;
+                        const rx = Math.abs(cmd.x2 - cmd.x1) / 2;
+                        const ry = Math.abs(cmd.y2 - cmd.y1) / 2;
+                        svgParts.push(`    <ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" fill="none" opacity="${cmd.opacity}"/>`);
+                    }
+                }
+            }
+
+            svgParts.push(`  </g>`);
+        }
+
+        svgParts.push(`</svg>`);
+
+        const svgContent = svgParts.join('\n');
+        const blob = new Blob([svgContent], { type: 'image/svg+xml' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.download = 'drawing.svg';
+        link.href = url;
+        link.click();
+        URL.revokeObjectURL(url);
+    }
+
+    openSVG(e) {
+        const file = e.target.files[0];
+        if (!file || !file.name.endsWith('.svg')) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            this.loadSVG(event.target.result);
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+    }
+
+    loadSVG(svgContent) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(svgContent, 'image/svg+xml');
+
+        const parseError = doc.querySelector('parsererror');
+        if (parseError) {
+            alert('Error parsing SVG file');
+            return;
+        }
+
+        const svg = doc.querySelector('svg');
+        if (!svg) {
+            alert('No SVG element found');
+            return;
+        }
+
+        const svgWidth = this.parseDimension(svg.getAttribute('width'));
+        const svgHeight = this.parseDimension(svg.getAttribute('height'));
+        const viewBox = svg.getAttribute('viewBox');
+
+        let vbX = 0, vbY = 0, vbW = this.canvasWidth, vbH = this.canvasHeight;
+        if (viewBox) {
+            const parts = viewBox.split(/[\s,]+/).map(Number);
+            if (parts.length === 4) {
+                vbX = parts[0];
+                vbY = parts[1];
+                vbW = parts[2];
+                vbH = parts[3];
+            }
+        } else if (svgWidth && svgHeight) {
+            vbW = svgWidth;
+            vbH = svgHeight;
+        }
+
+        const contentBBox = this.computeSVGBBox(svg);
+        if (contentBBox) {
+            vbX = contentBBox.x;
+            vbY = contentBBox.y;
+            vbW = contentBBox.w || 1;
+            vbH = contentBBox.h || 1;
+        }
+
+        const scaleX = this.canvasWidth / vbW;
+        const scaleY = this.canvasHeight / vbH;
+
+        this.clearAllLayers();
+
+        const layerGroups = this.extractLayers(svg);
+        if (layerGroups.length > 0) {
+            for (let i = 0; i < layerGroups.length; i++) {
+                const { name, elements, groupEl } = layerGroups[i];
+                this.addLayer(name);
+                this.parseSVGElements(elements, this.layers[0].vectorCommands, scaleX, scaleY, vbX, vbY);
+                if (groupEl) {
+                    const style = groupEl.getAttribute('style') || '';
+                    const match = style.match(/mix-blend-mode:\s*([\w-]+)/);
+                    if (match) {
+                        const cssBlend = match[1];
+                        const canvasBlendMap = {
+                            'normal': 'source-over',
+                            'multiply': 'multiply',
+                            'screen': 'screen',
+                            'overlay': 'overlay',
+                            'darken': 'darken',
+                            'lighten': 'lighten',
+                            'color-dodge': 'color-dodge',
+                            'color-burn': 'color-burn',
+                            'hard-light': 'hard-light',
+                            'soft-light': 'soft-light',
+                            'difference': 'difference',
+                            'exclusion': 'exclusion',
+                            'hue': 'hue',
+                            'saturation': 'saturation',
+                            'color': 'color',
+                            'luminosity': 'luminosity'
+                        };
+                        if (canvasBlendMap[cssBlend]) {
+                            this.layers[0].blendMode = canvasBlendMap[cssBlend];
+                        }
+                    }
+                }
+                this.renderLayer(0);
+            }
+        } else {
+            this.addLayer('Imported SVG');
+            const allElements = svg.children;
+            this.parseSVGElements(allElements, this.layers[0].vectorCommands, scaleX, scaleY, vbX, vbY);
+            this.renderLayer(0);
+        }
+
+        this.render();
+        this.updateLayerPanel();
+    }
+
+    computeSVGBBox(svg) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        let found = false;
+
+        const processElement = (el) => {
+            const tag = el.tagName.toLowerCase();
+            if (tag === 'path') {
+                const d = el.getAttribute('d');
+                if (d) {
+                    const pts = this.parsePathD(d, 1, 1, 0, 0);
+                    for (const p of pts) {
+                        if (p.x < minX) minX = p.x;
+                        if (p.y < minY) minY = p.y;
+                        if (p.x > maxX) maxX = p.x;
+                        if (p.y > maxY) maxY = p.y;
+                        found = true;
+                    }
+                }
+            } else if (tag === 'rect') {
+                const x = parseFloat(el.getAttribute('x') || '0');
+                const y = parseFloat(el.getAttribute('y') || '0');
+                const w = parseFloat(el.getAttribute('width') || '0');
+                const h = parseFloat(el.getAttribute('height') || '0');
+                minX = Math.min(minX, x); minY = Math.min(minY, y);
+                maxX = Math.max(maxX, x + w); maxY = Math.max(maxY, y + h);
+                found = true;
+            } else if (tag === 'circle' || tag === 'ellipse') {
+                const cx = parseFloat(el.getAttribute('cx') || '0');
+                const cy = parseFloat(el.getAttribute('cy') || '0');
+                const rx = parseFloat(el.getAttribute('rx') || el.getAttribute('r') || '0');
+                const ry = parseFloat(el.getAttribute('ry') || el.getAttribute('r') || '0');
+                minX = Math.min(minX, cx - rx); minY = Math.min(minY, cy - ry);
+                maxX = Math.max(maxX, cx + rx); maxY = Math.max(maxY, cy + ry);
+                found = true;
+            } else if (tag === 'line' || tag === 'polyline' || tag === 'polygon') {
+                const processPoints = (pts) => {
+                    for (const p of pts) {
+                        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+                        maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+                        found = true;
+                    }
+                };
+                if (tag === 'line') {
+                    processPoints([
+                        { x: parseFloat(el.getAttribute('x1') || '0'), y: parseFloat(el.getAttribute('y1') || '0') },
+                        { x: parseFloat(el.getAttribute('x2') || '0'), y: parseFloat(el.getAttribute('y2') || '0') }
+                    ]);
+                } else {
+                    const ptsStr = el.getAttribute('points');
+                    if (ptsStr) {
+                        const nums = ptsStr.trim().split(/[\s,]+/).map(Number).filter(n => !isNaN(n));
+                        const pts = [];
+                        for (let i = 0; i < nums.length; i += 2) {
+                            pts.push({ x: nums[i], y: nums[i + 1] });
+                        }
+                        processPoints(pts);
+                    }
+                }
+            } else if (tag === 'g') {
+                for (const child of el.children) {
+                    processElement(child);
+                }
+            }
+        };
+
+        for (const child of svg.children) {
+            processElement(child);
+        }
+
+        if (!found) return null;
+        return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+    }
+
+    extractLayers(svg) {
+        const layers = [];
+
+        const processGroup = (el) => {
+            const name = el.getAttribute('inkscape:label') || el.getAttribute('id') || el.getAttribute('class') || 'Layer';
+            const elements = Array.from(el.children);
+            layers.push({ name, elements, groupEl: el });
+        };
+
+        const layerGroups = svg.querySelectorAll('[inkscape\\:groupmode="layer"], .layer');
+        if (layerGroups.length > 0) {
+            layerGroups.forEach(g => processGroup(g));
+        } else {
+            const groups = svg.querySelectorAll('g');
+            if (groups.length > 0) {
+                groups.forEach(g => processGroup(g));
+            }
+        }
+
+        return layers;
+    }
+
+    parseSVGElements(elements, commands, scaleX, scaleY, vbX, vbY) {
+        for (const el of elements) {
+            const tag = el.tagName.toLowerCase();
+
+            if (tag === 'g') {
+                this.parseSVGElements(el.children, commands, scaleX, scaleY, vbX, vbY);
+                continue;
+            }
+
+            const opacity = parseFloat(el.getAttribute('opacity')) || 1;
+            const style = el.getAttribute('style') || '';
+            const stroke = this.getStyleValue(el, 'stroke', style);
+            const fill = this.getStyleValue(el, 'fill', style);
+            const strokeWidth = parseFloat(this.getStyleValue(el, 'stroke-width', style)) || 2;
+
+            if (tag === 'rect') {
+                const xAttr = el.getAttribute('x');
+                const yAttr = el.getAttribute('y');
+                const wAttr = el.getAttribute('width');
+                const hAttr = el.getAttribute('height');
+                const fillColor = this.getStyleValue(el, 'fill', style);
+
+                if ((!xAttr || xAttr === '0') && (!yAttr || yAttr === '0') &&
+                    fillColor === '#ffffff' && !stroke && wAttr && hAttr) {
+                    const svgW = parseFloat(wAttr);
+                    const svgH = parseFloat(hAttr);
+                    if (Math.abs(svgW - vbW) < 1 && Math.abs(svgH - vbH) < 1) {
+                        continue;
+                    }
+                }
+
+                const x = (parseFloat(xAttr || '0') - vbX) * scaleX;
+                const y = (parseFloat(yAttr || '0') - vbY) * scaleY;
+                const w = parseFloat(wAttr || '0') * scaleX;
+                const h = parseFloat(el.getAttribute('height') || '0') * scaleY;
+                commands.push({
+                    type: 'rect',
+                    color: stroke || '#000000',
+                    size: strokeWidth * (scaleX + scaleY) / 2,
+                    opacity,
+                    x1: x,
+                    y1: y,
+                    x2: x + w,
+                    y2: y + h
+                });
+            } else if (tag === 'circle') {
+                const cx = (parseFloat(el.getAttribute('cx') || '0') - vbX) * scaleX;
+                const cy = (parseFloat(el.getAttribute('cy') || '0') - vbY) * scaleY;
+                const r = parseFloat(el.getAttribute('r') || '0') * scaleX;
+                commands.push({
+                    type: 'circle',
+                    color: stroke || '#000000',
+                    size: strokeWidth * (scaleX + scaleY) / 2,
+                    opacity,
+                    x1: cx - r,
+                    y1: cy - r,
+                    x2: cx + r,
+                    y2: cy + r
+                });
+            } else if (tag === 'ellipse') {
+                const cx = (parseFloat(el.getAttribute('cx') || '0') - vbX) * scaleX;
+                const cy = (parseFloat(el.getAttribute('cy') || '0') - vbY) * scaleY;
+                const rx = parseFloat(el.getAttribute('rx') || '0') * scaleX;
+                const ry = parseFloat(el.getAttribute('ry') || '0') * scaleY;
+                commands.push({
+                    type: 'circle',
+                    color: stroke || '#000000',
+                    size: strokeWidth * (scaleX + scaleY) / 2,
+                    opacity,
+                    x1: cx - rx,
+                    y1: cy - ry,
+                    x2: cx + rx,
+                    y2: cy + ry
+                });
+            } else if (tag === 'line') {
+                const x1 = (parseFloat(el.getAttribute('x1') || '0') - vbX) * scaleX;
+                const y1 = (parseFloat(el.getAttribute('y1') || '0') - vbY) * scaleY;
+                const x2 = (parseFloat(el.getAttribute('x2') || '0') - vbX) * scaleX;
+                const y2 = (parseFloat(el.getAttribute('y2') || '0') - vbY) * scaleY;
+                commands.push({
+                    type: 'line',
+                    color: stroke || '#000000',
+                    size: strokeWidth * (scaleX + scaleY) / 2,
+                    opacity,
+                    x1, y1, x2, y2
+                });
+            } else if (tag === 'path') {
+                const d = el.getAttribute('d');
+                if (d) {
+                    const points = this.parsePathD(d, scaleX, scaleY, vbX, vbY);
+                    if (points.length > 0) {
+                        const isFillOnly = fill && (!stroke || stroke === 'none');
+                        commands.push({
+                            type: isFillOnly ? 'fill' : 'brush',
+                            color: isFillOnly ? fill : (stroke || fill || '#000000'),
+                            size: isFillOnly ? undefined : (strokeWidth * (scaleX + scaleY) / 2),
+                            opacity,
+                            points
+                        });
+                    }
+                }
+            } else if (tag === 'polygon' || tag === 'polyline') {
+                const pointsAttr = el.getAttribute('points');
+                if (pointsAttr) {
+                    const nums = pointsAttr.trim().split(/[\s,]+/).map(Number).filter(n => !isNaN(n));
+                    const parsedPoints = [];
+                    for (let i = 0; i < nums.length; i += 2) {
+                        parsedPoints.push({
+                            x: (nums[i] - vbX) * scaleX,
+                            y: (nums[i + 1] - vbY) * scaleY
+                        });
+                    }
+                    if (parsedPoints.length > 1) {
+                        if (tag === 'polygon') {
+                            parsedPoints.push({ ...parsedPoints[0] });
+                        }
+                        const isFillOnly = fill && (!stroke || stroke === 'none');
+                        commands.push({
+                            type: isFillOnly ? 'fill' : 'brush',
+                            color: isFillOnly ? fill : (stroke || fill || '#000000'),
+                            size: isFillOnly ? undefined : (strokeWidth * (scaleX + scaleY) / 2),
+                            opacity,
+                            points: parsedPoints
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    parsePathD(d, scaleX, scaleY, vbX, vbY) {
+        const points = [];
+        const tokens = d.match(/[MmLlHhVvCcSsQqTtAaZz]|-?[\d.]+/g) || [];
+
+        let currentX = 0, currentY = 0;
+        let startX = 0, startY = 0;
+        let prevCpx1 = 0, prevCpy1 = 0, prevCpx2 = 0, prevCpy2 = 0;
+        let prevQcpx = 0, prevQcpy = 0;
+        let prevCmd = '';
+        let cmdType = '';
+        let args = [];
+
+        const curveSamples = 20;
+
+        const pushPoint = (svgX, svgY) => {
+            points.push({
+                x: (svgX - vbX) * scaleX,
+                y: (svgY - vbY) * scaleY
+            });
+            currentX = svgX;
+            currentY = svgY;
+        };
+
+        const sampleCubicBezier = (x0, y0, x1, y1, x2, y2, x3, y3, n) => {
+            for (let i = 1; i <= n; i++) {
+                const t = i / n;
+                const mt = 1 - t;
+                const mt2 = mt * mt;
+                const mt3 = mt2 * mt;
+                const t2 = t * t;
+                const t3 = t2 * t;
+                const px = mt3 * x0 + 3 * mt2 * t * x1 + 3 * mt * t2 * x2 + t3 * x3;
+                const py = mt3 * y0 + 3 * mt2 * t * y1 + 3 * mt * t2 * y2 + t3 * y3;
+                pushPoint(px, py);
+            }
+        };
+
+        const sampleQuadraticBezier = (x0, y0, x1, y1, x2, y2, n) => {
+            for (let i = 1; i <= n; i++) {
+                const t = i / n;
+                const mt = 1 - t;
+                const px = mt * mt * x0 + 2 * mt * t * x1 + t * t * x2;
+                const py = mt * mt * y0 + 2 * mt * t * y1 + t * t * y2;
+                pushPoint(px, py);
+            }
+        };
+
+        const processCommand = (type, args) => {
+            if (args.length === 0) return;
+            switch (type) {
+                case 'M': {
+                    startX = args[0]; startY = args[1];
+                    pushPoint(args[0], args[1]);
+                    let i = 2;
+                    while (i + 2 <= args.length) {
+                        pushPoint(args[i], args[i + 1]);
+                        i += 2;
+                    }
+                    break;
+                }
+                case 'm': {
+                    startX = currentX + args[0]; startY = currentY + args[1];
+                    pushPoint(currentX + args[0], currentY + args[1]);
+                    let i = 2;
+                    while (i + 2 <= args.length) {
+                        pushPoint(currentX + args[i], currentY + args[i + 1]);
+                        i += 2;
+                    }
+                    break;
+                }
+                case 'L': {
+                    let i = 0;
+                    while (i + 2 <= args.length) {
+                        pushPoint(args[i], args[i + 1]);
+                        i += 2;
+                    }
+                    break;
+                }
+                case 'l': {
+                    let i = 0;
+                    while (i + 2 <= args.length) {
+                        pushPoint(currentX + args[i], currentY + args[i + 1]);
+                        i += 2;
+                    }
+                    break;
+                }
+                case 'H': {
+                    for (const x of args) pushPoint(x, currentY);
+                    break;
+                }
+                case 'h': {
+                    for (const dx of args) pushPoint(currentX + dx, currentY);
+                    break;
+                }
+                case 'V': {
+                    for (const y of args) pushPoint(currentX, y);
+                    break;
+                }
+                case 'v': {
+                    for (const dy of args) pushPoint(currentX, currentY + dy);
+                    break;
+                }
+                case 'C': {
+                    let i = 0;
+                    while (i + 6 <= args.length) {
+                        const cp1x = args[i], cp1y = args[i + 1];
+                        const cp2x = args[i + 2], cp2y = args[i + 3];
+                        const ex = args[i + 4], ey = args[i + 5];
+                        sampleCubicBezier(currentX, currentY, cp1x, cp1y, cp2x, cp2y, ex, ey, curveSamples);
+                        prevCpx2 = cp2x; prevCpy2 = cp2y;
+                        prevQcpx = cp1x; prevQcpy = cp1y;
+                        i += 6;
+                    }
+                    prevCmd = 'C';
+                    break;
+                }
+                case 'c': {
+                    let i = 0;
+                    while (i + 6 <= args.length) {
+                        const cp1x = currentX + args[i], cp1y = currentY + args[i + 1];
+                        const cp2x = currentX + args[i + 2], cp2y = currentY + args[i + 3];
+                        const ex = currentX + args[i + 4], ey = currentY + args[i + 5];
+                        sampleCubicBezier(currentX, currentY, cp1x, cp1y, cp2x, cp2y, ex, ey, curveSamples);
+                        prevCpx2 = cp2x; prevCpy2 = cp2y;
+                        prevQcpx = cp1x; prevQcpy = cp1y;
+                        i += 6;
+                    }
+                    prevCmd = 'C';
+                    break;
+                }
+                case 'S': {
+                    let i = 0;
+                    while (i + 4 <= args.length) {
+                        let rx = currentX, ry = currentY;
+                        if (prevCmd === 'C' || prevCmd === 'c') {
+                            rx = 2 * currentX - prevCpx2;
+                            ry = 2 * currentY - prevCpy2;
+                        }
+                        const cp2x = args[i], cp2y = args[i + 1];
+                        const ex = args[i + 2], ey = args[i + 3];
+                        sampleCubicBezier(currentX, currentY, rx, ry, cp2x, cp2y, ex, ey, curveSamples);
+                        prevCpx2 = cp2x; prevCpy2 = cp2y;
+                        prevQcpx = rx; prevQcpy = ry;
+                        i += 4;
+                    }
+                    prevCmd = 'S';
+                    break;
+                }
+                case 's': {
+                    let i = 0;
+                    while (i + 4 <= args.length) {
+                        let rx = currentX, ry = currentY;
+                        if (prevCmd === 'C' || prevCmd === 'c') {
+                            rx = 2 * currentX - prevCpx2;
+                            ry = 2 * currentY - prevCpy2;
+                        }
+                        const cp2x = currentX + args[i], cp2y = currentY + args[i + 1];
+                        const ex = currentX + args[i + 2], ey = currentY + args[i + 3];
+                        sampleCubicBezier(currentX, currentY, rx, ry, cp2x, cp2y, ex, ey, curveSamples);
+                        prevCpx2 = cp2x; prevCpy2 = cp2y;
+                        prevQcpx = rx; prevQcpy = ry;
+                        i += 4;
+                    }
+                    prevCmd = 'S';
+                    break;
+                }
+                case 'Q': {
+                    let i = 0;
+                    while (i + 4 <= args.length) {
+                        const cpx = args[i], cpy = args[i + 1];
+                        const ex = args[i + 2], ey = args[i + 3];
+                        sampleQuadraticBezier(currentX, currentY, cpx, cpy, ex, ey, curveSamples);
+                        prevQcpx = cpx; prevQcpy = cpy;
+                        i += 4;
+                    }
+                    prevCmd = 'Q';
+                    break;
+                }
+                case 'q': {
+                    let i = 0;
+                    while (i + 4 <= args.length) {
+                        const cpx = currentX + args[i], cpy = currentY + args[i + 1];
+                        const ex = currentX + args[i + 2], ey = currentY + args[i + 3];
+                        sampleQuadraticBezier(currentX, currentY, cpx, cpy, ex, ey, curveSamples);
+                        prevQcpx = cpx; prevQcpy = cpy;
+                        i += 4;
+                    }
+                    prevCmd = 'Q';
+                    break;
+                }
+                case 'T': {
+                    let i = 0;
+                    while (i + 2 <= args.length) {
+                        let rx = currentX, ry = currentY;
+                        if (prevCmd === 'Q' || prevCmd === 'q') {
+                            rx = 2 * currentX - prevQcpx;
+                            ry = 2 * currentY - prevQcpy;
+                        }
+                        const ex = args[i], ey = args[i + 1];
+                        sampleQuadraticBezier(currentX, currentY, rx, ry, ex, ey, curveSamples);
+                        prevQcpx = rx; prevQcpy = ry;
+                        i += 2;
+                    }
+                    prevCmd = 'T';
+                    break;
+                }
+                case 't': {
+                    let i = 0;
+                    while (i + 2 <= args.length) {
+                        let rx = currentX, ry = currentY;
+                        if (prevCmd === 'Q' || prevCmd === 'q') {
+                            rx = 2 * currentX - prevQcpx;
+                            ry = 2 * currentY - prevQcpy;
+                        }
+                        const ex = currentX + args[i], ey = currentY + args[i + 1];
+                        sampleQuadraticBezier(currentX, currentY, rx, ry, ex, ey, curveSamples);
+                        prevQcpx = rx; prevQcpy = ry;
+                        i += 2;
+                    }
+                    prevCmd = 'T';
+                    break;
+                }
+                case 'A':
+                case 'a': {
+                    let i = 0;
+                    while (i + 7 <= args.length) {
+                        const rx = args[i], ry = args[i + 1];
+                        const rotation = args[i + 2] * Math.PI / 180;
+                        const largeArc = args[i + 3];
+                        const sweep = args[i + 4];
+                        let ex, ey;
+                        if (type === 'A') {
+                            ex = args[i + 5]; ey = args[i + 6];
+                        } else {
+                            ex = currentX + args[i + 5]; ey = currentY + args[i + 6];
+                        }
+                        const arcPoints = this.sampleArc(currentX, currentY, rx, ry, rotation, largeArc, sweep, ex, ey, curveSamples);
+                        for (const p of arcPoints) pushPoint(p.x, p.y);
+                        i += 7;
+                    }
+                    prevCmd = 'A';
+                    break;
+                }
+                case 'Z':
+                case 'z':
+                    pushPoint(startX, startY);
+                    break;
+            }
+        };
+
+        for (const token of tokens) {
+            if (isNaN(Number(token))) {
+                if (args.length > 0 && cmdType) {
+                    processCommand(cmdType, args);
+                }
+                cmdType = token;
+                args = [];
+                prevCmd = token;
+            } else {
+                args.push(Number(token));
+            }
+        }
+        if (args.length > 0 && cmdType) {
+            processCommand(cmdType, args);
+        }
+
+        return points;
+    }
+
+    sampleArc(x0, y0, rx, ry, rotation, largeArc, sweep, x1, y1, n) {
+        const points = [];
+        if (rx === 0 || ry === 0) return points;
+
+        const dx = (x0 - x1) / 2, dy = (y0 - y1) / 2;
+        const cosRot = Math.cos(rotation), sinRot = Math.sin(rotation);
+        const x1p = cosRot * dx + sinRot * dy;
+        const y1p = -sinRot * dx + cosRot * dy;
+
+        const rxSq = rx * rx, rySq = ry * ry;
+        const x1pSq = x1p * x1p, y1pSq = y1p * y1p;
+        const radicant = (rxSq * rySq - rxSq * y1pSq - rySq * x1pSq) / (rxSq * y1pSq + rySq * x1pSq);
+        let cxp = 0, cyp = 0;
+
+        if (radicant < 0) {
+            const ratio = 1 / Math.sqrt(1 + radicant);
+            rx *= ratio; ry *= ratio;
+        } else {
+            let factor = Math.sqrt(radicant);
+            if (largeArc === sweep) factor = -factor;
+            cxp = factor * rx * y1p / ry;
+            cyp = -factor * ry * x1p / rx;
+        }
+
+        const cx = cosRot * cxp - sinRot * cyp + (x0 + x1) / 2;
+        const cy = sinRot * cxp + cosRot * cyp + (y0 + y1) / 2;
+
+        const startAngle = Math.atan2((y1p - cyp) / ry, (x1p - cxp) / rx);
+        const endAngle = Math.atan2((-y1p - cyp) / ry, (-x1p - cxp) / rx);
+
+        let sweepAngle = endAngle - startAngle;
+        if (sweep === 0 && sweepAngle > 0) sweepAngle -= 2 * Math.PI;
+        if (sweep === 1 && sweepAngle < 0) sweepAngle += 2 * Math.PI;
+
+        for (let i = 1; i <= n; i++) {
+            const t = i / n;
+            const angle = startAngle + sweepAngle * t;
+            const px = cosRot * rx * Math.cos(angle) - sinRot * ry * Math.sin(angle) + cx;
+            const py = sinRot * rx * Math.cos(angle) + cosRot * ry * Math.sin(angle) + cy;
+            points.push({ x: px, y: py });
+        }
+
+        return points;
+    }
+
+    getStyleValue(el, prop, style) {
+        const value = el.getAttribute(prop);
+        if (value && value !== 'none') return value;
+
+        const regex = new RegExp(`${prop}\\s*:\\s*([^;]+)`);
+        const match = style.match(regex);
+        if (match && match[1].trim() !== 'none') return match[1].trim();
+
+        return null;
+    }
+
+    parseDimension(val) {
+        if (!val) return null;
+        const num = parseFloat(val);
+        return isNaN(num) ? null : num;
+    }
+
+    clearAllLayers() {
+        this.layers = [];
+        this.activeLayerIndex = 0;
+        this.layerCounter = 0;
+        this.undoStack = [];
+        this.redoStack = [];
+        this.clearSelection();
+    }
+
+    renderLayer(index) {
+        const layer = this.layers[index];
+        const ctx = layer.canvas.getContext('2d');
+        ctx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+
+        for (const cmd of layer.vectorCommands || []) {
+            this.redrawCommand(ctx, cmd);
+        }
+    }
+
+    getCSSBlendMode(blendMode) {
+        const map = {
+            'source-over': 'normal',
+            'multiply': 'multiply',
+            'screen': 'screen',
+            'overlay': 'overlay',
+            'darken': 'darken',
+            'lighten': 'lighten',
+            'color-dodge': 'color-dodge',
+            'color-burn': 'color-burn',
+            'hard-light': 'hard-light',
+            'soft-light': 'soft-light',
+            'difference': 'difference',
+            'exclusion': 'exclusion',
+            'hue': 'hue',
+            'saturation': 'saturation',
+            'color': 'color',
+            'luminosity': 'luminosity'
+        };
+        return map[blendMode] || 'normal';
+    }
+
+    deleteSelected() {
+        if (this.selectedIndices.length === 0) return;
+        this.saveState();
+        const activeLayer = this.layers[this.activeLayerIndex];
+        activeLayer.vectorCommands = activeLayer.vectorCommands.filter((_, i) => !this.selectedIndices.includes(i));
+        this.clearSelection();
+        this.redrawActiveLayer();
+    }
+
+    moveSelectedToLayer(targetIndex) {
+        if (this.selectedIndices.length === 0 || targetIndex === this.activeLayerIndex) return;
+        this.saveState();
+        const sourceLayer = this.layers[this.activeLayerIndex];
+        const targetLayer = this.layers[targetIndex];
+
+        targetLayer.vectorCommands = targetLayer.vectorCommands || [];
+        const selectedCommands = [];
+        const remainingIndices = [];
+
+        sourceLayer.vectorCommands.forEach((cmd, i) => {
+            if (this.selectedIndices.includes(i)) {
+                selectedCommands.push(cmd);
+            } else {
+                remainingIndices.push(cmd);
+            }
+        });
+
+        targetLayer.vectorCommands.push(...selectedCommands);
+        sourceLayer.vectorCommands = remainingIndices;
+        this.clearSelection();
+        this.redrawActiveLayer();
+        targetLayer.canvas.getContext('2d').clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+        for (const cmd of targetLayer.vectorCommands) {
+            this.redrawCommand(targetLayer.canvas.getContext('2d'), cmd);
+        }
+        this.render();
+        this.updateLayerPanel();
+    }
+
+    centerSelectionHorizontal() {
+        if (this.selectedIndices.length === 0) return;
+        const bbox = this.selectionBBox;
+        if (!bbox) return;
+        this.saveState();
+        const layer = this.layers[this.activeLayerIndex];
+        const centerX = this.canvasWidth / 2;
+        const offset = centerX - (bbox.x + bbox.w / 2);
+        layer.vectorCommands.forEach((cmd, i) => {
+            if (this.selectedIndices.includes(i)) {
+                if (cmd.type === 'brush' || cmd.type === 'fill') {
+                    for (const p of cmd.points) {
+                        p.x += offset;
+                    }
+                } else {
+                    cmd.x1 += offset;
+                    cmd.x2 += offset;
+                }
+            }
+        });
+        this.redrawActiveLayer();
+        this.updateSelectionBBox();
+        this.drawSelection();
+    }
+
+    centerSelectionVertical() {
+        if (this.selectedIndices.length === 0) return;
+        const bbox = this.selectionBBox;
+        if (!bbox) return;
+        this.saveState();
+        const layer = this.layers[this.activeLayerIndex];
+        const centerY = this.canvasHeight / 2;
+        const offset = centerY - (bbox.y + bbox.h / 2);
+        layer.vectorCommands.forEach((cmd, i) => {
+            if (this.selectedIndices.includes(i)) {
+                if (cmd.type === 'brush' || cmd.type === 'fill') {
+                    for (const p of cmd.points) {
+                        p.y += offset;
+                    }
+                } else {
+                    cmd.y1 += offset;
+                    cmd.y2 += offset;
+                }
+            }
+        });
+        this.redrawActiveLayer();
+        this.updateSelectionBBox();
+        this.drawSelection();
+    }
+
+    handleKeyboard(e) {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+        if (e.key === 'F2') {
+            e.preventDefault();
+            this.renameActiveLayer();
+            return;
+        }
+
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+            if (this.pathEditMode) {
+                e.preventDefault();
+                this.deleteSelectedPoint();
+                return;
+            }
+            if (this.currentTool === 'select' && this.selectedIndices.length > 0) {
+                e.preventDefault();
+                this.deleteSelected();
+            }
+            return;
+        }
+
+        if (e.ctrlKey || e.metaKey) {
+            if (e.key === 'z' || e.key === 'Z') {
+                e.preventDefault();
+                if (e.shiftKey) {
+                    this.redo();
+                } else {
+                    this.undo();
+                }
+            } else if (e.key === 'y' || e.key === 'Y') {
+                e.preventDefault();
+                this.redo();
+            } else if (e.key === 'a' || e.key === 'A') {
+                if (this.currentTool === 'select') {
+                    e.preventDefault();
+                    const activeLayer = this.layers[this.activeLayerIndex];
+                    this.selectedIndices = (activeLayer.vectorCommands || []).map((_, i) => i);
+                    this.selectedCommands = [...activeLayer.vectorCommands];
+                    this.updateSelectionBBox();
+                    this.render();
+                }
+            }
+            return;
+        }
+
+        switch (e.key.toLowerCase()) {
+            case 'b':
+            case 'l':
+            case 'r':
+            case 'c':
+                if (!this.pathEditMode) {
+                    this.setTool(e.key.toLowerCase() === 'b' ? 'brush' : e.key.toLowerCase() === 'l' ? 'line' : e.key.toLowerCase() === 'r' ? 'rect' : 'circle');
+                }
+                break;
+            case 'v':
+                this.setTool('select');
+                break;
+            case 'f':
+                if (!this.pathEditMode) {
+                    this.setTool('fill');
+                }
+                break;
+        }
+    }
+
+    togglePathEdit() {
+        if (this.selectedIndices.length === 0) return;
+
+        const activeLayer = this.layers[this.activeLayerIndex];
+        const hasBrush = this.selectedIndices.some(idx => activeLayer.vectorCommands[idx].type === 'brush');
+
+        if (!hasBrush) return;
+
+        this.pathEditMode = !this.pathEditMode;
+        document.getElementById('pathEditBtn').classList.toggle('active', this.pathEditMode);
+
+        if (this.pathEditMode) {
+            const firstBrush = this.selectedIndices.find(idx => activeLayer.vectorCommands[idx].type === 'brush');
+            this.editingPathCmd = activeLayer.vectorCommands[firstBrush];
+            this.editingPathIndex = firstBrush;
+            document.getElementById('deleteSelectedBtn').style.display = 'none';
+            const layerBtns = ['addLayerBtn', 'deleteLayerBtn', 'moveUpLayerBtn', 'moveDownLayerBtn', 'mergeDownBtn', 'renameLayerBtn', 'clearLayerBtn'];
+            layerBtns.forEach(id => {
+                document.getElementById(id).disabled = true;
+                document.getElementById(id).style.opacity = '0.3';
+            });
+            document.getElementById('toolBrush').style.display = 'none';
+            document.getElementById('toolLine').style.display = 'none';
+            document.getElementById('toolRect').style.display = 'none';
+            document.getElementById('toolCircle').style.display = 'none';
+            document.getElementById('toolFill').style.display = 'none';
+        } else {
+            this.editingPathCmd = null;
+            this.editingPathIndex = -1;
+            this.selectedPointIndex = -1;
+            this.updateDeleteButton();
+            const layerBtns = ['addLayerBtn', 'deleteLayerBtn', 'moveUpLayerBtn', 'moveDownLayerBtn', 'mergeDownBtn', 'renameLayerBtn', 'clearLayerBtn'];
+            layerBtns.forEach(id => {
+                document.getElementById(id).disabled = false;
+                document.getElementById(id).style.opacity = '1';
+            });
+            document.getElementById('toolBrush').style.display = 'flex';
+            document.getElementById('toolLine').style.display = 'flex';
+            document.getElementById('toolRect').style.display = 'flex';
+            document.getElementById('toolCircle').style.display = 'flex';
+            document.getElementById('toolFill').style.display = 'flex';
+        }
+
+        document.getElementById('pathEditControls').style.display = 'flex';
+        this.render();
+        this.drawSelection();
+    }
+
+    toggleAddPointMode() {
+        this.addPointMode = !this.addPointMode;
+        document.getElementById('addPointBtn').classList.toggle('active', this.addPointMode);
+        this.drawSelection();
+    }
+
+    deleteSelectedPoint() {
+        if (!this.pathEditMode || this.selectedPointIndex < 0 || !this.editingPathCmd) return;
+
+        this.saveState();
+        this.editingPathCmd.points.splice(this.selectedPointIndex, 1);
+
+        if (this.editingPathCmd.points.length === 0) {
+            this.exitPathEditMode();
+        } else {
+            this.selectedPointIndex = Math.min(this.selectedPointIndex, this.editingPathCmd.points.length - 1);
+        }
+
+        this.redrawActiveLayer();
+    }
+
+    exitPathEditMode() {
+        this.pathEditMode = false;
+        this.editingPathCmd = null;
+        this.editingPathIndex = -1;
+        this.selectedPointIndex = -1;
+        this.addPointMode = false;
+        document.getElementById('pathEditBtn').classList.remove('active');
+        document.getElementById('addPointBtn').classList.remove('active');
+        this.updateDeleteButton();
+    }
+
+    showPathEditControls(show) {
+        document.getElementById('pathEditControls').style.display = show ? 'flex' : 'none';
+        if (!show) {
+            this.exitPathEditMode();
+        }
+    }
+
+    drawPathEditPoints() {
+        if (!this.pathEditMode || !this.editingPathCmd) return;
+
+        const points = this.editingPathCmd.points;
+        const pointRadius = 5;
+        const handleRadius = 4;
+
+        for (let i = 0; i < points.length; i++) {
+            const p = points[i];
+            const isSelected = i === this.selectedPointIndex;
+            const isHovered = i === this.hoveredPointIndex;
+            const radius = isSelected || isHovered ? pointRadius + 2 : pointRadius;
+
+            this.cursorCtx.fillStyle = isSelected ? '#ff6b35' : '#ffffff';
+            this.cursorCtx.strokeStyle = isSelected ? '#ff6b35' : '#4a9eff';
+            this.cursorCtx.lineWidth = 2;
+
+            this.cursorCtx.beginPath();
+            this.cursorCtx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+            this.cursorCtx.fill();
+            this.cursorCtx.stroke();
+
+            if (i < points.length - 1) {
+                const next = points[i + 1];
+                this.cursorCtx.strokeStyle = '#4a9eff';
+                this.cursorCtx.lineWidth = 1;
+                this.cursorCtx.setLineDash([2, 2]);
+                this.cursorCtx.beginPath();
+                this.cursorCtx.moveTo(p.x, p.y);
+                this.cursorCtx.lineTo(next.x, next.y);
+                this.cursorCtx.stroke();
+                this.cursorCtx.setLineDash([]);
+            }
+        }
+
+        if (this.addPointMode && this.hoveredSegmentIndex >= 0) {
+            const idx = this.hoveredSegmentIndex;
+            if (idx < points.length - 1) {
+                const p1 = points[idx];
+                const p2 = points[idx + 1];
+                const mx = (p1.x + p2.x) / 2;
+                const my = (p1.y + p2.y) / 2;
+
+                this.cursorCtx.fillStyle = '#4a9eff';
+                this.cursorCtx.strokeStyle = '#ffffff';
+                this.cursorCtx.lineWidth = 2;
+
+                this.cursorCtx.beginPath();
+                this.cursorCtx.arc(mx, my, 7, 0, Math.PI * 2);
+                this.cursorCtx.fill();
+                this.cursorCtx.stroke();
+
+                this.cursorCtx.fillStyle = '#ffffff';
+                this.cursorCtx.font = 'bold 10px sans-serif';
+                this.cursorCtx.textAlign = 'center';
+                this.cursorCtx.textBaseline = 'middle';
+                this.cursorCtx.fillText('+', mx, my);
+            }
+        }
+    }
+
+    hitTestPathPoint(mx, my) {
+        if (!this.editingPathCmd) return -1;
+
+        const points = this.editingPathCmd.points;
+        const hitRadius = 8;
+
+        for (let i = 0; i < points.length; i++) {
+            const p = points[i];
+            if (this.dist(mx, my, p.x, p.y) < hitRadius) {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    hitTestPathSegment(mx, my) {
+        if (!this.editingPathCmd || !this.addPointMode) return -1;
+
+        const points = this.editingPathCmd.points;
+        const hitRadius = 6;
+
+        for (let i = 0; i < points.length - 1; i++) {
+            const p1 = points[i];
+            const p2 = points[i + 1];
+            if (this.distToSegment(mx, my, p1.x, p1.y, p2.x, p2.y) < hitRadius) {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    addPointToPath(mx, my) {
+        if (!this.addPointMode || this.hoveredSegmentIndex < 0 || !this.editingPathCmd) return;
+
+        this.saveState();
+        const idx = this.hoveredSegmentIndex;
+        this.editingPathCmd.points.splice(idx + 1, 0, { x: mx, y: my });
+        this.selectedPointIndex = idx + 1;
+        this.redrawActiveLayer();
+    }
+
+    moveSelectedPoint(dx, dy) {
+        if (!this.pathEditMode || this.selectedPointIndex < 0 || !this.editingPathCmd) return;
+
+        const point = this.editingPathCmd.points[this.selectedPointIndex];
+        point.x += dx;
+        point.y += dy;
+        this.redrawActiveLayer();
+    }
+
+    handlePathEditMouseDown(e, coords) {
+        if (!this.pathEditMode) return false;
+
+        const pointIdx = this.hitTestPathPoint(coords.x, coords.y);
+
+        if (pointIdx >= 0) {
+            if (e.detail === 2) {
+                this.saveState();
+                this.editingPathCmd.points.splice(pointIdx, 1);
+                if (this.editingPathCmd.points.length === 0) {
+                    this.exitPathEditMode();
+                    this.redrawActiveLayer();
+                    return true;
+                }
+                this.selectedPointIndex = Math.min(pointIdx, this.editingPathCmd.points.length - 1);
+                this.redrawActiveLayer();
+                return true;
+            }
+
+            this.saveState();
+            this.selectedPointIndex = pointIdx;
+            this.isDraggingPoint = true;
+            this.render();
+            this.drawSelection();
+            return true;
+        }
+
+        if (this.addPointMode) {
+            const segIdx = this.hitTestPathSegment(coords.x, coords.y);
+            if (segIdx >= 0) {
+                this.addPointToPath(coords.x, coords.y);
+                return true;
+            }
+        }
+
+        this.selectedPointIndex = -1;
+        this.render();
+        this.drawSelection();
+        return true;
+    }
+
+    handlePathEditMouseMove(e, coords) {
+        if (!this.pathEditMode) return false;
+
+        if (this.isDraggingPoint && this.selectedPointIndex >= 0 && this.editingPathCmd) {
+            if (!this.lastPathPoint) {
+                this.lastPathPoint = { x: coords.x, y: coords.y };
+            }
+
+            const dx = coords.x - this.lastPathPoint.x;
+            const dy = coords.y - this.lastPathPoint.y;
+            this.moveSelectedPoint(dx, dy);
+            this.lastPathPoint = { x: coords.x, y: coords.y };
+            this.render();
+            this.drawSelection();
+            return true;
+        }
+
+        const pointIdx = this.hitTestPathPoint(coords.x, coords.y);
+        const segIdx = this.hitTestPathSegment(coords.x, coords.y);
+
+        if (pointIdx !== this.hoveredPointIndex || segIdx !== this.hoveredSegmentIndex) {
+            this.hoveredPointIndex = pointIdx;
+            this.hoveredSegmentIndex = segIdx;
+            this.canvas.style.cursor = pointIdx >= 0 ? 'move' : (this.addPointMode && segIdx >= 0 ? 'copy' : 'pointer');
+            this.render();
+            this.drawSelection();
+        }
+
+        return false;
+    }
+
+    handlePathEditMouseUp(e) {
+        this.isDraggingPoint = false;
+        this.lastPathPoint = null;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    window.app = new DrawingApp();
+});
