@@ -620,6 +620,54 @@ class DrawingApp {
         if (!this.selectionBBox || this.selectedIndices.length === 0) {
             this.cursorCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
         }
+        if (this.isDrawing) {
+            const activeLayer = this.layers[this.activeLayerIndex];
+            if (this.currentStroke && this.currentStroke.points.length > 0) {
+                this.saveState();
+                activeLayer.vectorCommands.push(this.currentStroke);
+            }
+            this.currentStroke = null;
+            this.isDrawing = false;
+            this.previewCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+            if (this.currentTool === 'brush') {
+                this.redrawActiveLayer();
+            } else {
+                this.render();
+            }
+        } else if (this.currentTool === 'select' && (this.isSelecting || this.isRotating)) {
+            if (this.selectMode === 'marquee') {
+                const lastCoords = { x: this.mouseX, y: this.mouseY };
+                const x1 = Math.min(this.selectStart.x, lastCoords.x);
+                const y1 = Math.min(this.selectStart.y, lastCoords.y);
+                const x2 = Math.max(this.selectStart.x, lastCoords.x);
+                const y2 = Math.max(this.selectStart.y, lastCoords.y);
+                if (x2 - x1 > 2 && y2 - y1 > 2) {
+                    this.clearSelection();
+                    const activeLayer = this.layers[this.activeLayerIndex];
+                    const commands = activeLayer.vectorCommands || [];
+                    for (let i = 0; i < commands.length; i++) {
+                        if (this.commandInRect(commands[i], x1, y1, x2, y2)) {
+                            this.selectedIndices.push(i);
+                            this.selectedCommands.push(commands[i]);
+                        }
+                    }
+                    this.updateSelectionBBox();
+                    this.updateDeleteButton();
+                    this.syncColorPickerToSelection();
+                    this.syncOpacityToSelection();
+                    this.syncSizeToSelection();
+                    this.drawSelection();
+                }
+                this.previewCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+            } else if (this.selectMode === 'move' || this.selectMode === 'resize') {
+                this.redoStack = [];
+            }
+            this.isSelecting = false;
+            this.selectMode = null;
+            this.resizeHandle = null;
+            this.isRotating = false;
+            this.rotationCenter = null;
+        }
     }
 
     drawBrush(ctx, x, y) {
