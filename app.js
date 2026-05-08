@@ -15,6 +15,7 @@ class DrawingApp {
         this.brushColor = '#000000';
         this.brushSize = 10;
         this.brushOpacity = 1;
+        this.expandOffset = 2;
 
         this.isDrawing = false;
         this.lastX = 0;
@@ -64,7 +65,7 @@ class DrawingApp {
 
         this.createPreviewCanvas();
         this.createCursorOverlay();
-        this.positionPreviewCanvas();
+        this.fitCanvasToContainer();
         this.addLayer('Background');
 
         this.setupEventListeners();
@@ -110,6 +111,27 @@ class DrawingApp {
         }
     }
 
+    fitCanvasToContainer() {
+        const containerRect = this.canvasContainer.getBoundingClientRect();
+        const padding = 20;
+        const availW = containerRect.width - padding * 2;
+        const availH = containerRect.height - padding * 2;
+        const aspect = this.canvasWidth / this.canvasHeight;
+
+        let displayW, displayH;
+        if (availW / availH > aspect) {
+            displayH = availH;
+            displayW = displayH * aspect;
+        } else {
+            displayW = availW;
+            displayH = displayW / aspect;
+        }
+
+        this.canvas.style.width = displayW + 'px';
+        this.canvas.style.height = displayH + 'px';
+        this.positionPreviewCanvas();
+    }
+
     setupEventListeners() {
         this.canvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
         this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
@@ -126,7 +148,7 @@ class DrawingApp {
         document.getElementById('brushSize').addEventListener('input', (e) => {
             const newSize = parseInt(e.target.value);
             this.brushSize = newSize;
-            document.getElementById('brushSizeValue').textContent = this.brushSize;
+            document.getElementById('brushSizeValue').value = newSize;
             this.drawCursor();
 
             if (this.selectedIndices && this.selectedIndices.length > 0) {
@@ -140,10 +162,33 @@ class DrawingApp {
             }
         });
 
+        document.getElementById('brushSizeValue').addEventListener('change', (e) => {
+            const val = parseInt(e.target.value);
+            if (isNaN(val)) return;
+            const clamped = Math.max(1, Math.min(100, val));
+            document.getElementById('brushSize').value = clamped;
+            document.getElementById('brushSizeValue').value = clamped;
+            document.getElementById('brushSize').dispatchEvent(new Event('input'));
+        });
+
+        document.getElementById('expandOffset').addEventListener('input', (e) => {
+            this.expandOffset = parseFloat(e.target.value);
+            document.getElementById('expandOffsetValue').value = this.expandOffset;
+        });
+
+        document.getElementById('expandOffsetValue').addEventListener('change', (e) => {
+            const val = parseFloat(e.target.value);
+            if (isNaN(val)) return;
+            const clamped = Math.max(0, Math.min(20, val));
+            document.getElementById('expandOffset').value = clamped;
+            document.getElementById('expandOffsetValue').value = clamped;
+            document.getElementById('expandOffset').dispatchEvent(new Event('input'));
+        });
+
         document.getElementById('brushOpacity').addEventListener('input', (e) => {
             const newOpacity = parseInt(e.target.value) / 100;
             this.brushOpacity = newOpacity;
-            document.getElementById('brushOpacityValue').textContent = e.target.value + '%';
+            document.getElementById('brushOpacityValue').value = e.target.value;
             if (this.selectedIndices && this.selectedIndices.length > 0) {
                 this.saveState();
                 const activeLayer = this.layers[this.activeLayerIndex];
@@ -152,6 +197,15 @@ class DrawingApp {
                 }
                 this.redrawActiveLayer();
             }
+        });
+
+        document.getElementById('brushOpacityValue').addEventListener('change', (e) => {
+            const val = parseInt(e.target.value);
+            if (isNaN(val)) return;
+            const clamped = Math.max(1, Math.min(100, val));
+            document.getElementById('brushOpacity').value = clamped;
+            document.getElementById('brushOpacityValue').value = clamped;
+            document.getElementById('brushOpacity').dispatchEvent(new Event('input'));
         });
 
         document.getElementById('colorPicker').addEventListener('input', (e) => {
@@ -210,7 +264,7 @@ class DrawingApp {
 
         document.addEventListener('keydown', (e) => this.handleKeyboard(e));
 
-        window.addEventListener('resize', () => this.positionPreviewCanvas());
+        window.addEventListener('resize', () => this.fitCanvasToContainer());
     }
 
     getCanvasCoordinates(e) {
@@ -379,7 +433,7 @@ class DrawingApp {
             if (sizes.size === 1) {
                 this.brushSize = sizes.values().next().value;
                 document.getElementById('brushSize').value = this.brushSize;
-                document.getElementById('brushSizeValue').textContent = this.brushSize;
+                document.getElementById('brushSizeValue').value = this.brushSize;
                 this.drawCursor();
             }
         }
@@ -426,7 +480,7 @@ class DrawingApp {
             this.brushOpacity = op;
             const pct = Math.round(op * 100);
             document.getElementById('brushOpacity').value = pct;
-            document.getElementById('brushOpacityValue').textContent = pct + '%';
+            document.getElementById('brushOpacityValue').value = pct;
         }
     }
 
@@ -746,9 +800,14 @@ class DrawingApp {
             const showSize = ['brush', 'line', 'rect', 'circle'].includes(tool);
             sizeGroup.style.display = showSize ? 'flex' : 'none';
         }
+        const expandGroup = document.getElementById('expandToolGroup');
+        if (expandGroup) {
+            expandGroup.style.display = tool === 'fill' ? 'flex' : 'none';
+        }
         if (this.mouseOnCanvas) {
             this.drawCursor();
         }
+        this.render();
     }
 
     drawCursor() {
@@ -1274,7 +1333,7 @@ class DrawingApp {
             stack.push(cx, cy - 1);
         }
 
-        const boundaryPoints = this.expandBoundary(this.extractBoundary(fillMask, x, y), 2);
+        const boundaryPoints = this.expandBoundary(this.extractBoundary(fillMask, x, y), this.expandOffset);
         if (boundaryPoints.length < 3) return;
 
         this.saveState();
@@ -1550,11 +1609,18 @@ class DrawingApp {
         this.ctx.fillStyle = '#ffffff';
         this.ctx.fillRect(0, 0, this.canvasWidth, this.canvasHeight);
 
+        const dimOther = this.currentTool === 'select';
+
         for (let i = this.layers.length - 1; i >= 0; i--) {
             const layer = this.layers[i];
             if (!layer.visible) continue;
 
-            this.ctx.globalAlpha = layer.opacity;
+            let alpha = layer.opacity;
+            if (dimOther && i !== this.activeLayerIndex) {
+                alpha *= 0.5;
+            }
+
+            this.ctx.globalAlpha = alpha;
             this.ctx.globalCompositeOperation = layer.blendMode;
             this.ctx.drawImage(layer.canvas, 0, 0);
         }
@@ -2733,6 +2799,8 @@ class DrawingApp {
             document.getElementById('toolRect').style.display = 'none';
             document.getElementById('toolCircle').style.display = 'none';
             document.getElementById('toolFill').style.display = 'none';
+            const expandGroup = document.getElementById('expandToolGroup');
+            if (expandGroup) expandGroup.style.display = 'none';
         } else {
             this.editingPathCmd = null;
             this.editingPathIndex = -1;
@@ -2748,6 +2816,8 @@ class DrawingApp {
             document.getElementById('toolRect').style.display = 'flex';
             document.getElementById('toolCircle').style.display = 'flex';
             document.getElementById('toolFill').style.display = 'flex';
+            const expandGroup = document.getElementById('expandToolGroup');
+            if (expandGroup) expandGroup.style.display = this.currentTool === 'fill' ? 'flex' : 'none';
         }
 
         document.getElementById('pathEditControls').style.display = 'flex';

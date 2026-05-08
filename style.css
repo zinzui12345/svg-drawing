@@ -126,6 +126,30 @@ input[type="color"] {
     text-align: center;
 }
 
+input.spinbox {
+    width: 40px;
+    height: 24px;
+    padding: 0 4px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 11px;
+    text-align: center;
+    -moz-appearance: textfield;
+}
+
+input.spinbox::-webkit-inner-spin-button,
+input.spinbox::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+input.spinbox:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
 .main-content {
     display: flex;
     flex: 1;

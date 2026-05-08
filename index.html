@@ -54,12 +54,17 @@
             <div class="tool-group" id="sizeToolGroup">
                 <label class="tool-label">Size</label>
                 <input type="range" id="brushSize" min="1" max="100" value="10">
-                <span id="brushSizeValue">10</span>
+                <input type="number" id="brushSizeValue" class="spinbox" min="1" max="100" value="10">
+            </div>
+            <div class="tool-group" id="expandToolGroup" style="display:none;">
+                <label class="tool-label">Expand</label>
+                <input type="range" id="expandOffset" min="0" max="20" value="2" step="0.5">
+                <input type="number" id="expandOffsetValue" class="spinbox" min="0" max="20" value="2" step="0.5">
             </div>
             <div class="tool-group">
                 <label class="tool-label">Opacity</label>
                 <input type="range" id="brushOpacity" min="1" max="100" value="100">
-                <span id="brushOpacityValue">100%</span>
+                <input type="number" id="brushOpacityValue" class="spinbox" min="1" max="100" value="100" style="width:48px;text-align:right;">
             </div>
 
             <div class="tool-group">
