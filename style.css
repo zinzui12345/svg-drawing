@@ -119,9 +119,8 @@ input[type="color"] {
     padding: 0;
 }
 
-#brushSizeValue, #brushOpacityValue, #layerOpacityValue {
+#brushSizeValue, #brushOpacityValue, #layerOpacityValue, #expandOffsetValue {
     font-size: 11px;
-    color: var(--text-secondary);
     min-width: 35px;
     text-align: center;
 }

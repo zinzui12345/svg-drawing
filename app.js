@@ -238,8 +238,17 @@ class DrawingApp {
 
         document.getElementById('layerOpacity').addEventListener('input', (e) => {
             const opacity = parseInt(e.target.value) / 100;
-            document.getElementById('layerOpacityValue').textContent = e.target.value + '%';
+            document.getElementById('layerOpacityValue').value = e.target.value;
             this.setLayerOpacity(this.activeLayerIndex, opacity);
+        });
+
+        document.getElementById('layerOpacityValue').addEventListener('change', (e) => {
+            const val = parseInt(e.target.value);
+            if (isNaN(val)) return;
+            const clamped = Math.max(0, Math.min(100, val));
+            document.getElementById('layerOpacity').value = clamped;
+            document.getElementById('layerOpacityValue').value = clamped;
+            document.getElementById('layerOpacity').dispatchEvent(new Event('input'));
         });
 
         document.getElementById('layerBlendMode').addEventListener('change', (e) => {
@@ -1596,6 +1605,7 @@ class DrawingApp {
     }
 
     clearActiveLayer() {
+        this.saveState();
         this.clearSelection();
         const layer = this.layers[this.activeLayerIndex];
         const ctx = layer.canvas.getContext('2d');
@@ -1761,51 +1771,47 @@ class DrawingApp {
                     this.activeLayerIndex = index;
                     this.updateLayerPanel();
                     document.getElementById('layerOpacity').value = Math.round(layer.opacity * 100);
-                    document.getElementById('layerOpacityValue').textContent = Math.round(layer.opacity * 100) + '%';
+                    document.getElementById('layerOpacityValue').value = Math.round(layer.opacity * 100);
                     document.getElementById('layerBlendMode').value = layer.blendMode;
                 }
             });
 
+            const visBtn = document.createElement('button');
+            visBtn.className = 'layer-visibility';
+            visBtn.textContent = layer.visible ? '👁' : '👁‍🗨';
+            visBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                layer.visible = !layer.visible;
+                this.render();
+                this.updateLayerPanel();
+            });
+            layerItem.appendChild(visBtn);
+
             const thumb = document.createElement('div');
             thumb.className = 'layer-thumb';
+            layerItem.appendChild(thumb);
+
             const thumbCanvas = document.createElement('canvas');
             thumbCanvas.width = 32;
             thumbCanvas.height = 32;
             const thumbCtx = thumbCanvas.getContext('2d');
-            thumbCtx.clearRect(0, 0, 32, 32);
             thumbCtx.drawImage(layer.canvas, 0, 0, this.canvasWidth, this.canvasHeight, 0, 0, 32, 32);
             thumb.appendChild(thumbCanvas);
 
             const info = document.createElement('div');
             info.className = 'layer-info';
 
-            const name = document.createElement('div');
-            name.className = 'layer-name';
-            name.textContent = layer.name;
-            name.addEventListener('dblclick', (e) => {
-                e.stopPropagation();
-                this.editLayerName(index, name);
-            });
-            info.appendChild(name);
-
-            const visibility = document.createElement('button');
-            visibility.className = 'layer-visibility';
-            visibility.textContent = layer.visible ? '\u{1F441}' : '\u{1F6AB}';
-            visibility.addEventListener('click', (e) => {
-                e.stopPropagation();
-                layer.visible = !layer.visible;
-                this.render();
-                this.updateLayerPanel();
-            });
-
-            layerItem.appendChild(thumb);
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'layer-name';
+            nameSpan.textContent = layer.name;
+            info.appendChild(nameSpan);
             layerItem.appendChild(info);
-            layerItem.appendChild(visibility);
+
             layerList.appendChild(layerItem);
         });
 
         document.getElementById('layerOpacity').value = Math.round(this.layers[this.activeLayerIndex].opacity * 100);
-        document.getElementById('layerOpacityValue').textContent = Math.round(this.layers[this.activeLayerIndex].opacity * 100) + '%';
+        document.getElementById('layerOpacityValue').value = Math.round(this.layers[this.activeLayerIndex].opacity * 100);
         document.getElementById('layerBlendMode').value = this.layers[this.activeLayerIndex].blendMode;
     }
 
