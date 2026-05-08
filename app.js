@@ -2753,7 +2753,9 @@ class DrawingApp {
                     this.selectedIndices = (activeLayer.vectorCommands || []).map((_, i) => i);
                     this.selectedCommands = [...activeLayer.vectorCommands];
                     this.updateSelectionBBox();
+                    this.updateDeleteButton();
                     this.render();
+                    this.drawSelection();
                 }
             }
             return;
