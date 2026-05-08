@@ -1,9 +1,11 @@
 class DrawingApp {
     constructor() {
-        this.canvas = document.getElementById('mainCanvas');
-        this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
+        this.viewportCanvas = document.getElementById('viewportCanvas');
+        this.viewportCtx = this.viewportCanvas.getContext('2d');
         this.canvasContainer = document.getElementById('canvasContainer');
 
+        this.canvasCSSWidth = 0;
+        this.canvasCSSHeight = 0;
         this.canvasWidth = 1200;
         this.canvasHeight = 800;
 
@@ -26,20 +28,20 @@ class DrawingApp {
         this.maxHistory = 50;
 
         this.shapeStart = null;
-        this.previewCanvas = null;
-        this.previewCtx = null;
 
-        this.cursorCanvas = null;
-        this.cursorCtx = null;
         this.mouseX = 0;
         this.mouseY = 0;
         this.mouseOnCanvas = false;
+
+        this.currentStroke = null;
 
         this.selectedCommands = [];
         this.selectedIndices = [];
         this.selectionBBox = null;
 
         this.isSelecting = false;
+        this.isPanning = false;
+        this.panStart = { x: 0, y: 0 };
         this.selectMode = null;
         this.selectStart = null;
         this.selectDragOffset = null;
@@ -60,58 +62,19 @@ class DrawingApp {
     }
 
     init() {
-        this.canvas.width = this.canvasWidth;
-        this.canvas.height = this.canvasHeight;
-
-        this.createPreviewCanvas();
-        this.createCursorOverlay();
+        this.zoom = 1;
+        this.panX = 0;
+        this.panY = 0;
         this.fitCanvasToContainer();
-        this.addLayer('Background');
-
+        this.addLayer('Layer 1');
         this.setupEventListeners();
         this.updateLayerPanel();
     }
 
-    createPreviewCanvas() {
-        this.previewCanvas = document.createElement('canvas');
-        this.previewCanvas.width = this.canvasWidth;
-        this.previewCanvas.height = this.canvasHeight;
-        this.previewCanvas.style.cssText = 'position:absolute;pointer-events:none;';
-        this.previewCtx = this.previewCanvas.getContext('2d');
-        this.canvasContainer.appendChild(this.previewCanvas);
-        this.positionPreviewCanvas();
-    }
-
-    createCursorOverlay() {
-        this.cursorCanvas = document.createElement('canvas');
-        this.cursorCanvas.width = this.canvasWidth;
-        this.cursorCanvas.height = this.canvasHeight;
-        this.cursorCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
-        this.cursorCtx = this.cursorCanvas.getContext('2d');
-        this.canvasContainer.style.position = 'relative';
-        this.canvasContainer.appendChild(this.cursorCanvas);
-    }
-
-    positionPreviewCanvas() {
-        const rect = this.canvas.getBoundingClientRect();
-        const containerRect = this.canvasContainer.getBoundingClientRect();
-        const left = rect.left - containerRect.left;
-        const top = rect.top - containerRect.top;
-
-        this.previewCanvas.style.left = left + 'px';
-        this.previewCanvas.style.top = top + 'px';
-        this.previewCanvas.style.width = rect.width + 'px';
-        this.previewCanvas.style.height = rect.height + 'px';
-
-        if (this.cursorCanvas) {
-            this.cursorCanvas.style.left = left + 'px';
-            this.cursorCanvas.style.top = top + 'px';
-            this.cursorCanvas.style.width = rect.width + 'px';
-            this.cursorCanvas.style.height = rect.height + 'px';
-        }
-    }
-
     fitCanvasToContainer() {
+        this.zoom = 1;
+        this.panX = 0;
+        this.panY = 0;
         const containerRect = this.canvasContainer.getBoundingClientRect();
         const padding = 20;
         const availW = containerRect.width - padding * 2;
@@ -127,17 +90,65 @@ class DrawingApp {
             displayH = displayW / aspect;
         }
 
-        this.canvas.style.width = displayW + 'px';
-        this.canvas.style.height = displayH + 'px';
-        this.positionPreviewCanvas();
+        this.canvasCSSWidth = displayW;
+        this.canvasCSSHeight = displayH;
+
+        const dpr = window.devicePixelRatio || 1;
+        this.viewportCanvas.width = containerRect.width * dpr;
+        this.viewportCanvas.height = containerRect.height * dpr;
+
+        this.updateZoomUI();
+        this.viewportRender();
+    }
+
+    applyTransform() {
+        this.updateZoomUI();
+        this.viewportRender();
+    }
+
+    updateZoomUI() {
+        const pct = Math.round(this.zoom * 100);
+        const slider = document.getElementById('zoomSlider');
+        const value = document.getElementById('zoomValue');
+        if (slider) slider.value = pct;
+        if (value) value.value = pct;
+    }
+
+    handleWheel(e) {
+        if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            const delta = -e.deltaY * 0.001;
+            const factor = 1 + delta;
+            const newZoom = Math.max(1, Math.min(50, this.zoom * factor));
+            if (newZoom === this.zoom) return;
+            const vpRect = this.viewportCanvas.getBoundingClientRect();
+            const baseOffX = (vpRect.width - this.canvasCSSWidth) / 2;
+            const baseOffY = (vpRect.height - this.canvasCSSHeight) / 2;
+            let mx, my;
+            if (e.clientX >= vpRect.left && e.clientX <= vpRect.right &&
+                e.clientY >= vpRect.top && e.clientY <= vpRect.bottom) {
+                mx = e.clientX - vpRect.left - baseOffX;
+                my = e.clientY - vpRect.top - baseOffY;
+            } else {
+                mx = vpRect.width / 2 - baseOffX;
+                my = vpRect.height / 2 - baseOffY;
+            }
+            this.panX = mx - (mx - this.panX) * (newZoom / this.zoom);
+            this.panY = my - (my - this.panY) * (newZoom / this.zoom);
+            this.zoom = newZoom;
+            this.applyTransform();
+        }
     }
 
     setupEventListeners() {
-        this.canvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
-        this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
-        this.canvas.addEventListener('mouseup', (e) => this.handleMouseUp(e));
-        this.canvas.addEventListener('mouseleave', (e) => this.handleMouseLeave(e));
-        this.canvas.addEventListener('mouseenter', (e) => this.handleMouseEnter(e));
+        this.viewportCanvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
+        this.viewportCanvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+        this.viewportCanvas.addEventListener('mouseup', (e) => this.handleMouseUp(e));
+        this.viewportCanvas.addEventListener('mouseleave', (e) => this.handleMouseLeave(e));
+        this.viewportCanvas.addEventListener('mouseenter', (e) => this.handleMouseEnter(e));
+        document.addEventListener('wheel', (e) => this.handleWheel(e), { passive: false });
+        this.viewportCanvas.addEventListener('contextmenu', (e) => e.preventDefault());
+        this.viewportCanvas.addEventListener('mousedown', (e) => this.handleContainerMouseDown(e));
 
         document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -149,7 +160,7 @@ class DrawingApp {
             const newSize = parseInt(e.target.value);
             this.brushSize = newSize;
             document.getElementById('brushSizeValue').value = newSize;
-            this.drawCursor();
+            this.viewportRender();
 
             if (this.selectedIndices && this.selectedIndices.length > 0) {
                 this.saveState();
@@ -158,7 +169,7 @@ class DrawingApp {
                     const cmd = activeLayer.vectorCommands[idx];
                     if (cmd) cmd.size = newSize;
                 }
-                this.redrawActiveLayer();
+                this.viewportRender();
             }
         });
 
@@ -195,7 +206,7 @@ class DrawingApp {
                 for (const idx of this.selectedIndices) {
                     activeLayer.vectorCommands[idx].opacity = newOpacity;
                 }
-                this.redrawActiveLayer();
+                this.viewportRender();
             }
         });
 
@@ -217,7 +228,7 @@ class DrawingApp {
                 for (const idx of this.selectedIndices) {
                     activeLayer.vectorCommands[idx].color = newColor;
                 }
-                this.redrawActiveLayer();
+                this.viewportRender();
             }
         });
 
@@ -228,6 +239,34 @@ class DrawingApp {
         document.getElementById('clearLayerBtn').addEventListener('click', () => this.clearActiveLayer());
         document.getElementById('exportSVGBtn').addEventListener('click', () => this.exportSVG());
         document.getElementById('exportPNGBtn').addEventListener('click', () => this.exportImage());
+        document.getElementById('resetZoomBtn').addEventListener('click', () => this.fitCanvasToContainer());
+
+        document.getElementById('zoomSlider').addEventListener('input', (e) => {
+            const pct = parseInt(e.target.value);
+            const newZoom = pct / 100;
+            if (newZoom === this.zoom) return;
+            const dpr = window.devicePixelRatio || 1;
+            const vpCSSW = this.viewportCanvas.width / dpr;
+            const vpCSSH = this.viewportCanvas.height / dpr;
+            const baseOffX = (vpCSSW - this.canvasCSSWidth) / 2;
+            const baseOffY = (vpCSSH - this.canvasCSSHeight) / 2;
+            const relX = vpCSSW / 2 - baseOffX;
+            const relY = vpCSSH / 2 - baseOffY;
+            this.panX = relX - (relX - this.panX) * (newZoom / this.zoom);
+            this.panY = relY - (relY - this.panY) * (newZoom / this.zoom);
+            this.zoom = newZoom;
+            document.getElementById('zoomValue').value = pct;
+            this.applyTransform();
+        });
+
+        document.getElementById('zoomValue').addEventListener('change', (e) => {
+            const val = parseInt(e.target.value);
+            if (isNaN(val)) return;
+            const clamped = Math.max(100, Math.min(5000, val));
+            document.getElementById('zoomSlider').value = clamped;
+            document.getElementById('zoomValue').value = clamped;
+            document.getElementById('zoomSlider').dispatchEvent(new Event('input'));
+        });
 
         document.getElementById('addLayerBtn').addEventListener('click', () => this.addLayer());
         document.getElementById('deleteLayerBtn').addEventListener('click', () => this.deleteActiveLayer());
@@ -277,13 +316,226 @@ class DrawingApp {
     }
 
     getCanvasCoordinates(e) {
-        const rect = this.canvas.getBoundingClientRect();
-        const scaleX = this.canvas.width / rect.width;
-        const scaleY = this.canvas.height / rect.height;
+        const rect = this.viewportCanvas.getBoundingClientRect();
+        const baseOffX = (rect.width - this.canvasCSSWidth) / 2 + this.panX;
+        const baseOffY = (rect.height - this.canvasCSSHeight) / 2 + this.panY;
+        const relX = (e.clientX - rect.left - baseOffX) / this.zoom;
+        const relY = (e.clientY - rect.top - baseOffY) / this.zoom;
         return {
-            x: (e.clientX - rect.left) * scaleX,
-            y: (e.clientY - rect.top) * scaleY
+            x: relX * (this.canvasWidth / this.canvasCSSWidth),
+            y: relY * (this.canvasHeight / this.canvasCSSHeight)
         };
+    }
+
+    render() {
+        this.viewportRender();
+    }
+
+    getViewportTransform() {
+        const dpr = window.devicePixelRatio || 1;
+        const vpCSSW = this.viewportCanvas.width / dpr;
+        const vpCSSH = this.viewportCanvas.height / dpr;
+        const baseOffX = (vpCSSW - this.canvasCSSWidth) / 2;
+        const baseOffY = (vpCSSH - this.canvasCSSHeight) / 2;
+        return {
+            sx: (this.canvasCSSWidth / this.canvasWidth) * this.zoom * dpr,
+            sy: (this.canvasCSSHeight / this.canvasHeight) * this.zoom * dpr,
+            tx: (baseOffX + this.panX) * dpr,
+            ty: (baseOffY + this.panY) * dpr,
+            baseOffX, baseOffY, dpr, vpCSSW, vpCSSH
+        };
+    }
+
+    viewportRender() {
+        const vpCtx = this.viewportCtx;
+        const vp = this.viewportCanvas;
+        const dpr = window.devicePixelRatio || 1;
+        const vpW = vp.width;
+        const vpH = vp.height;
+
+        vpCtx.setTransform(1, 0, 0, 1, 0, 0);
+        vpCtx.fillStyle = '#2a2a2a';
+        vpCtx.fillRect(0, 0, vpW, vpH);
+
+        if (!this.canvasCSSWidth || !this.canvasCSSHeight) return;
+
+        const t = this.getViewportTransform();
+        vpCtx.setTransform(t.sx, 0, 0, t.sy, t.tx, t.ty);
+
+        vpCtx.fillStyle = '#ffffff';
+        vpCtx.fillRect(0, 0, this.canvasWidth, this.canvasHeight);
+
+        const dimOther = this.currentTool === 'select';
+
+        for (let i = this.layers.length - 1; i >= 0; i--) {
+            const layer = this.layers[i];
+            if (!layer.visible) continue;
+
+            let alpha = layer.opacity;
+            if (dimOther && i !== this.activeLayerIndex) alpha *= 0.5;
+
+            for (const cmd of layer.vectorCommands || []) {
+                vpCtx.globalAlpha = alpha * (cmd.opacity || 1);
+                vpCtx.globalCompositeOperation = layer.blendMode;
+                this.redrawCommand(vpCtx, cmd);
+            }
+        }
+
+        vpCtx.globalAlpha = 1;
+        vpCtx.globalCompositeOperation = 'source-over';
+
+        this.drawOverlays(vpCtx);
+    }
+
+    drawOverlays(ctx) {
+        if (this.pathEditMode) {
+            this.drawPathEditPoints(ctx);
+            return;
+        }
+
+        if (this.currentTool === 'select') {
+            this.drawSelectionBox(ctx);
+        }
+
+        if (!this.mouseOnCanvas) return;
+
+        if (this.currentTool === 'brush') {
+            if (this.currentStroke && this.currentStroke.points.length > 0) {
+                const pts = this.currentStroke.points;
+                ctx.globalAlpha = this.currentStroke.opacity || 1;
+                if (pts.length < 2) {
+                    ctx.fillStyle = this.currentStroke.color;
+                    ctx.beginPath();
+                    ctx.arc(pts[0].x, pts[0].y, this.currentStroke.size / 2, 0, Math.PI * 2);
+                    ctx.fill();
+                } else {
+                    ctx.strokeStyle = this.currentStroke.color;
+                    ctx.lineWidth = this.currentStroke.size;
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    ctx.beginPath();
+                    ctx.moveTo(pts[0].x, pts[0].y);
+                    for (let i = 1; i < pts.length; i++) {
+                        ctx.lineTo(pts[i].x, pts[i].y);
+                    }
+                    ctx.stroke();
+                }
+                ctx.globalAlpha = 1;
+            }
+            const radius = this.brushSize / 2;
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(this.mouseX, this.mouseY, radius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.strokeStyle = '#808080';
+            ctx.beginPath();
+            ctx.moveTo(this.mouseX - 5, this.mouseY);
+            ctx.lineTo(this.mouseX + 5, this.mouseY);
+            ctx.moveTo(this.mouseX, this.mouseY - 5);
+            ctx.lineTo(this.mouseX, this.mouseY + 5);
+            ctx.stroke();
+        } else if (this.currentTool === 'fill') {
+            ctx.strokeStyle = this.brushColor;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(this.mouseX, this.mouseY, 10, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.fillStyle = this.brushColor;
+            ctx.globalAlpha = 0.5;
+            ctx.beginPath();
+            ctx.arc(this.mouseX, this.mouseY, 10, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+
+        if (this.shapeStart && ['line', 'rect', 'circle'].includes(this.currentTool)) {
+            this.drawShape(ctx, this.shapeStart.x, this.shapeStart.y, this.mouseX, this.mouseY);
+        }
+
+        if (this.currentTool === 'select' && this.selectMode === 'marquee' && this.selectStart) {
+            const x1 = Math.min(this.selectStart.x, this.mouseX);
+            const y1 = Math.min(this.selectStart.y, this.mouseY);
+            const x2 = Math.max(this.selectStart.x, this.mouseX);
+            const y2 = Math.max(this.selectStart.y, this.mouseY);
+            ctx.strokeStyle = '#4a9eff';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]);
+            ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+            ctx.setLineDash([]);
+        }
+    }
+
+    drawSelectionBox(ctx) {
+        if (!this.selectionBBox || this.selectedIndices.length === 0) return;
+
+        const bbox = this.selectionBBox;
+        const handleSize = 8;
+
+        ctx.strokeStyle = '#4a9eff';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.strokeRect(bbox.x, bbox.y, bbox.w, bbox.h);
+        ctx.setLineDash([]);
+
+        const corners = [
+            { x: bbox.x, y: bbox.y },
+            { x: bbox.x + bbox.w / 2, y: bbox.y },
+            { x: bbox.x + bbox.w, y: bbox.y },
+            { x: bbox.x, y: bbox.y + bbox.h / 2 },
+            { x: bbox.x + bbox.w, y: bbox.y + bbox.h / 2 },
+            { x: bbox.x, y: bbox.y + bbox.h },
+            { x: bbox.x + bbox.w / 2, y: bbox.y + bbox.h },
+            { x: bbox.x + bbox.w, y: bbox.y + bbox.h }
+        ];
+
+        ctx.fillStyle = '#ffffff';
+        ctx.strokeStyle = '#4a9eff';
+        ctx.lineWidth = 1.5;
+        corners.forEach(c => {
+            ctx.beginPath();
+            ctx.fillRect(c.x - handleSize / 2, c.y - handleSize / 2, handleSize, handleSize);
+            ctx.strokeRect(c.x - handleSize / 2, c.y - handleSize / 2, handleSize, handleSize);
+        });
+
+        const rotateHandle = this.getRotateHandle();
+        ctx.beginPath();
+        ctx.strokeStyle = '#4a9eff';
+        ctx.moveTo(bbox.cx, bbox.y);
+        ctx.lineTo(rotateHandle.x, rotateHandle.y);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.fillStyle = '#4a9eff';
+        ctx.arc(rotateHandle.x, rotateHandle.y, handleSize, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('\u21BB', rotateHandle.x, rotateHandle.y);
+    }
+
+    handleContainerMouseDown(e) {
+        if (e.button === 1) {
+            e.preventDefault();
+            this.isPanning = true;
+            this.panStart = { x: e.clientX - this.panX, y: e.clientY - this.panY };
+        }
+    }
+
+    handleDocumentMouseMove(e) {
+        if (this.isPanning) {
+            this.panX = e.clientX - this.panStart.x;
+            this.panY = e.clientY - this.panStart.y;
+            this.applyTransform();
+        }
+    }
+
+    handleDocumentMouseUp(e) {
+        if (this.isPanning) {
+            this.isPanning = false;
+        }
     }
 
     handleMouseDown(e) {
@@ -325,14 +577,9 @@ class DrawingApp {
                 opacity: this.brushOpacity,
                 points: [{ x: coords.x, y: coords.y }]
             };
-            const ctx = activeLayer.canvas.getContext('2d');
-            ctx.globalAlpha = this.brushOpacity;
-            this.drawBrush(ctx, coords.x, coords.y);
-            ctx.globalAlpha = 1;
-            this.render();
+            this.viewportRender();
         }
     }
-
 
     handleSelectMouseDown(e, coords) {
         const activeLayer = this.layers[this.activeLayerIndex];
@@ -346,6 +593,7 @@ class DrawingApp {
 
         const rotateHandle = this.getRotateHandle();
         if (rotateHandle && this.dist(coords.x, coords.y, rotateHandle.x, rotateHandle.y) < hitRadius + 4) {
+            this.saveState();
             this.isRotating = true;
             this.rotationCenter = { x: this.selectionBBox.cx, y: this.selectionBBox.cy };
             this.rotationStartAngle = Math.atan2(coords.y - this.rotationCenter.y, coords.x - this.rotationCenter.x);
@@ -355,6 +603,7 @@ class DrawingApp {
 
         const resizeHandle = this.getResizeHandleAt(coords.x, coords.y);
         if (resizeHandle) {
+            this.saveState();
             this.isSelecting = true;
             this.selectMode = 'resize';
             this.selectStart = coords;
@@ -364,6 +613,7 @@ class DrawingApp {
         }
 
         if (this.selectionBBox && this.isInBBox(coords.x, coords.y, this.selectionBBox)) {
+            this.saveState();
             this.isSelecting = true;
             this.selectMode = 'move';
             this.selectStart = { x: coords.x, y: coords.y };
@@ -414,7 +664,7 @@ class DrawingApp {
         const hasBrush = this.selectedIndices.some(idx => activeLayer.vectorCommands[idx].type === 'brush');
         this.showPathEditControls(hasBrush);
         this.syncSizeToSelection();
-        this.drawSelection();
+        this.viewportRender();
     }
 
     syncSizeToSelection() {
@@ -443,24 +693,19 @@ class DrawingApp {
                 this.brushSize = sizes.values().next().value;
                 document.getElementById('brushSize').value = this.brushSize;
                 document.getElementById('brushSizeValue').value = this.brushSize;
-                this.drawCursor();
             }
         }
     }
 
     syncColorPickerToSelection() {
-        if (this.selectedIndices.length === 0) {
-            return;
-        }
+        if (this.selectedIndices.length === 0) return;
 
         const activeLayer = this.layers[this.activeLayerIndex];
         const colors = new Set();
 
         for (const idx of this.selectedIndices) {
             const cmd = activeLayer.vectorCommands[idx];
-            if (cmd.color) {
-                colors.add(cmd.color);
-            }
+            if (cmd.color) colors.add(cmd.color);
         }
 
         if (colors.size === 1) {
@@ -470,18 +715,14 @@ class DrawingApp {
     }
 
     syncOpacityToSelection() {
-        if (this.selectedIndices.length === 0) {
-            return;
-        }
+        if (this.selectedIndices.length === 0) return;
 
         const activeLayer = this.layers[this.activeLayerIndex];
         const opacities = new Set();
 
         for (const idx of this.selectedIndices) {
             const cmd = activeLayer.vectorCommands[idx];
-            if (cmd.opacity !== undefined) {
-                opacities.add(cmd.opacity);
-            }
+            if (cmd.opacity !== undefined) opacities.add(cmd.opacity);
         }
 
         if (opacities.size === 1) {
@@ -500,8 +741,7 @@ class DrawingApp {
             this.rotationStartAngle = angle;
             this.rotateSelected(deltaAngle);
             this.updateSelectionBBox();
-            this.render();
-            this.drawSelection();
+            this.viewportRender();
             return;
         }
 
@@ -513,25 +753,13 @@ class DrawingApp {
             this.moveSelected(dx, dy);
             this.selectStart = { x: coords.x, y: coords.y };
             this.updateSelectionBBox();
-            this.render();
-            this.drawSelection();
+            this.viewportRender();
         } else if (this.selectMode === 'marquee') {
-            const x1 = Math.min(this.selectStart.x, coords.x);
-            const y1 = Math.min(this.selectStart.y, coords.y);
-            const x2 = Math.max(this.selectStart.x, coords.x);
-            const y2 = Math.max(this.selectStart.y, coords.y);
-
-            this.previewCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
-            this.previewCtx.strokeStyle = '#4a9eff';
-            this.previewCtx.lineWidth = 1;
-            this.previewCtx.setLineDash([4, 4]);
-            this.previewCtx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-            this.previewCtx.setLineDash([]);
+            this.viewportRender();
         } else if (this.selectMode === 'resize') {
             this.resizeSelected(coords);
             this.updateSelectionBBox();
-            this.render();
-            this.drawSelection();
+            this.viewportRender();
         }
     }
 
@@ -566,9 +794,8 @@ class DrawingApp {
                 this.syncColorPickerToSelection();
                 this.syncOpacityToSelection();
                 this.syncSizeToSelection();
-                this.drawSelection();
+                this.viewportRender();
             }
-            this.previewCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
         } else if (this.selectMode === 'move' || this.selectMode === 'resize') {
             this.redoStack = [];
         }
@@ -578,47 +805,51 @@ class DrawingApp {
     }
 
     handleMouseMove(e) {
+        if (this.isPanning) {
+            this.panX = e.clientX - this.panStart.x;
+            this.panY = e.clientY - this.panStart.y;
+            this.applyTransform();
+            return;
+        }
         const coords = this.getCanvasCoordinates(e);
         this.mouseX = coords.x;
         this.mouseY = coords.y;
 
         if (this.pathEditMode) {
             this.handlePathEditMouseMove(e, coords);
+            this.viewportRender();
             return;
         }
 
         if (this.currentTool === 'select') {
             this.handleSelectMouseMove(e, coords);
+            this.viewportRender();
             return;
         }
 
         if (!this.isDrawing) {
-            this.drawCursor();
+            this.viewportRender();
             return;
         }
 
         if (this.currentTool === 'brush') {
-            const activeLayer = this.layers[this.activeLayerIndex];
-            const ctx = activeLayer.canvas.getContext('2d');
-            ctx.globalAlpha = this.brushOpacity;
-
-            this.interpolateBrush(ctx, this.lastX, this.lastY, coords.x, coords.y);
-
             if (this.currentStroke) {
                 this.currentStroke.points.push({ x: coords.x, y: coords.y });
             }
-
-            ctx.globalAlpha = 1;
             this.lastX = coords.x;
             this.lastY = coords.y;
-            this.render();
+            this.viewportRender();
         } else if (this.currentTool === 'line' || this.currentTool === 'rect' || this.currentTool === 'circle') {
-            this.previewCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
-            this.drawShape(this.previewCtx, this.shapeStart.x, this.shapeStart.y, coords.x, coords.y);
+            this.viewportRender();
         }
     }
 
     handleMouseUp(e) {
+        if (this.isPanning) {
+            this.isPanning = false;
+            return;
+        }
+
         if (this.pathEditMode) {
             this.handlePathEditMouseUp(e);
             return;
@@ -636,11 +867,6 @@ class DrawingApp {
         if (this.currentTool === 'line' || this.currentTool === 'rect' || this.currentTool === 'circle') {
             const coords = this.getCanvasCoordinates(e);
             this.saveState();
-            const ctx = activeLayer.canvas.getContext('2d');
-            ctx.globalAlpha = this.brushOpacity;
-            this.drawShape(ctx, this.shapeStart.x, this.shapeStart.y, coords.x, coords.y);
-            ctx.globalAlpha = 1;
-            this.previewCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
 
             activeLayer.vectorCommands.push({
                 type: this.currentTool,
@@ -662,12 +888,8 @@ class DrawingApp {
 
         this.currentStroke = null;
         this.isDrawing = false;
-
-        if (this.currentTool === 'brush') {
-            this.redrawActiveLayer();
-        } else {
-            this.render();
-        }
+        this.shapeStart = null;
+        this.viewportRender();
     }
 
     handleMouseEnter(e) {
@@ -675,14 +897,12 @@ class DrawingApp {
         const coords = this.getCanvasCoordinates(e);
         this.mouseX = coords.x;
         this.mouseY = coords.y;
-        this.drawCursor();
+        this.viewportRender();
     }
 
     handleMouseLeave(e) {
+        this.isPanning = false;
         this.mouseOnCanvas = false;
-        if (!this.selectionBBox || this.selectedIndices.length === 0) {
-            this.cursorCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
-        }
         if (this.isDrawing) {
             const activeLayer = this.layers[this.activeLayerIndex];
             if (this.currentStroke && this.currentStroke.points.length > 0) {
@@ -691,12 +911,8 @@ class DrawingApp {
             }
             this.currentStroke = null;
             this.isDrawing = false;
-            this.previewCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
-            if (this.currentTool === 'brush') {
-                this.redrawActiveLayer();
-            } else {
-                this.render();
-            }
+            this.shapeStart = null;
+            this.viewportRender();
         } else if (this.currentTool === 'select' && (this.isSelecting || this.isRotating)) {
             if (this.selectMode === 'marquee') {
                 const lastCoords = { x: this.mouseX, y: this.mouseY };
@@ -719,9 +935,8 @@ class DrawingApp {
                     this.syncColorPickerToSelection();
                     this.syncOpacityToSelection();
                     this.syncSizeToSelection();
-                    this.drawSelection();
+                    this.viewportRender();
                 }
-                this.previewCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
             } else if (this.selectMode === 'move' || this.selectMode === 'resize') {
                 this.redoStack = [];
             }
@@ -731,18 +946,16 @@ class DrawingApp {
             this.isRotating = false;
             this.rotationCenter = null;
         }
+        this.viewportRender();
     }
 
     drawBrush(ctx, x, y) {
         ctx.globalCompositeOperation = 'source-over';
-
         const radius = this.brushSize / 2;
         ctx.fillStyle = this.brushColor;
-
         ctx.beginPath();
         ctx.arc(x, y, radius, 0, Math.PI * 2);
         ctx.fill();
-
         ctx.globalCompositeOperation = 'source-over';
     }
 
@@ -788,8 +1001,51 @@ class DrawingApp {
         }
     }
 
+    getTempCanvas(w, h) {
+        const c = document.createElement('canvas');
+        c.width = w;
+        c.height = h;
+        return c;
+    }
+
+    renderAllToCtx(ctx, w, h) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+
+        const scaleX = w / this.canvasWidth;
+        const scaleY = h / this.canvasHeight;
+        ctx.scale(scaleX, scaleY);
+
+        const dimOther = this.currentTool === 'select';
+
+        for (let i = this.layers.length - 1; i >= 0; i--) {
+            const layer = this.layers[i];
+            if (!layer.visible) continue;
+
+            let alpha = layer.opacity;
+            if (dimOther && i !== this.activeLayerIndex) alpha *= 0.5;
+
+            for (const cmd of layer.vectorCommands || []) {
+                ctx.globalAlpha = alpha;
+                ctx.globalCompositeOperation = layer.blendMode;
+                this.redrawCommand(ctx, cmd);
+            }
+        }
+
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+
     pickColor(x, y) {
-        const pixel = this.ctx.getImageData(x, y, 1, 1).data;
+        const temp = this.getTempCanvas(this.canvasWidth, this.canvasHeight);
+        const tempCtx = temp.getContext('2d');
+        this.renderAllToCtx(tempCtx, this.canvasWidth, this.canvasHeight);
+
+        const px = Math.round(x);
+        const py = Math.round(y);
+        const pixel = tempCtx.getImageData(px, py, 1, 1).data;
         const hex = '#' + [pixel[0], pixel[1], pixel[2]].map(v => v.toString(16).padStart(2, '0')).join('');
         this.brushColor = hex;
         document.getElementById('colorPicker').value = hex;
@@ -800,7 +1056,7 @@ class DrawingApp {
         document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
             btn.classList.toggle('active', btn.dataset.tool === tool);
         });
-        this.canvas.style.cursor = tool === 'select' ? 'copy' : 'crosshair';
+        this.viewportCanvas.style.cursor = tool === 'select' ? 'copy' : 'crosshair';
         if (tool !== 'select') {
             this.clearSelection();
         }
@@ -813,49 +1069,7 @@ class DrawingApp {
         if (expandGroup) {
             expandGroup.style.display = tool === 'fill' ? 'flex' : 'none';
         }
-        if (this.mouseOnCanvas) {
-            this.drawCursor();
-        }
-        this.render();
-    }
-
-    drawCursor() {
-        this.cursorCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
-
-        if (this.currentTool === 'select') {
-            this.drawSelection();
-            return;
-        }
-
-        if (!this.mouseOnCanvas) return;
-
-        if (this.currentTool === 'brush') {
-            const radius = this.brushSize / 2;
-            this.cursorCtx.strokeStyle = '#000000';
-            this.cursorCtx.lineWidth = 1;
-            this.cursorCtx.beginPath();
-            this.cursorCtx.arc(this.mouseX, this.mouseY, radius, 0, Math.PI * 2);
-            this.cursorCtx.stroke();
-            this.cursorCtx.strokeStyle = '#808080';
-            this.cursorCtx.beginPath();
-            this.cursorCtx.moveTo(this.mouseX - 5, this.mouseY);
-            this.cursorCtx.lineTo(this.mouseX + 5, this.mouseY);
-            this.cursorCtx.moveTo(this.mouseX, this.mouseY - 5);
-            this.cursorCtx.lineTo(this.mouseX, this.mouseY + 5);
-            this.cursorCtx.stroke();
-        } else if (this.currentTool === 'fill') {
-            this.cursorCtx.strokeStyle = this.brushColor;
-            this.cursorCtx.lineWidth = 2;
-            this.cursorCtx.beginPath();
-            this.cursorCtx.arc(this.mouseX, this.mouseY, 10, 0, Math.PI * 2);
-            this.cursorCtx.stroke();
-            this.cursorCtx.fillStyle = this.brushColor;
-            this.cursorCtx.globalAlpha = 0.5;
-            this.cursorCtx.beginPath();
-            this.cursorCtx.arc(this.mouseX, this.mouseY, 10, 0, Math.PI * 2);
-            this.cursorCtx.fill();
-            this.cursorCtx.globalAlpha = 1;
-        }
+        this.viewportRender();
     }
 
     clearSelection() {
@@ -866,9 +1080,8 @@ class DrawingApp {
         this.isRotating = false;
         this.selectMode = null;
         this.resizeHandle = null;
-        this.cursorCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
-        this.previewCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
         this.updateDeleteButton();
+        this.viewportRender();
     }
 
     updateDeleteButton() {
@@ -895,63 +1108,6 @@ class DrawingApp {
             });
             moveSelect.value = '';
         }
-    }
-
-    drawSelection() {
-        this.cursorCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
-
-        if (this.pathEditMode) {
-            this.drawPathEditPoints();
-            return;
-        }
-
-        if (!this.selectionBBox || this.selectedIndices.length === 0) return;
-
-        const bbox = this.selectionBBox;
-        const handleSize = 8;
-
-        this.cursorCtx.strokeStyle = '#4a9eff';
-        this.cursorCtx.lineWidth = 1;
-        this.cursorCtx.setLineDash([4, 3]);
-        this.cursorCtx.strokeRect(bbox.x, bbox.y, bbox.w, bbox.h);
-        this.cursorCtx.setLineDash([]);
-
-        const corners = [
-            { x: bbox.x, y: bbox.y },
-            { x: bbox.x + bbox.w / 2, y: bbox.y },
-            { x: bbox.x + bbox.w, y: bbox.y },
-            { x: bbox.x, y: bbox.y + bbox.h / 2 },
-            { x: bbox.x + bbox.w, y: bbox.y + bbox.h / 2 },
-            { x: bbox.x, y: bbox.y + bbox.h },
-            { x: bbox.x + bbox.w / 2, y: bbox.y + bbox.h },
-            { x: bbox.x + bbox.w, y: bbox.y + bbox.h }
-        ];
-
-        this.cursorCtx.fillStyle = '#ffffff';
-        this.cursorCtx.strokeStyle = '#4a9eff';
-        this.cursorCtx.lineWidth = 1.5;
-        corners.forEach(c => {
-            this.cursorCtx.beginPath();
-            this.cursorCtx.fillRect(c.x - handleSize / 2, c.y - handleSize / 2, handleSize, handleSize);
-            this.cursorCtx.strokeRect(c.x - handleSize / 2, c.y - handleSize / 2, handleSize, handleSize);
-        });
-
-        const rotateHandle = this.getRotateHandle();
-        this.cursorCtx.beginPath();
-        this.cursorCtx.strokeStyle = '#4a9eff';
-        this.cursorCtx.moveTo(bbox.cx, bbox.y);
-        this.cursorCtx.lineTo(rotateHandle.x, rotateHandle.y);
-        this.cursorCtx.stroke();
-
-        this.cursorCtx.beginPath();
-        this.cursorCtx.fillStyle = '#4a9eff';
-        this.cursorCtx.arc(rotateHandle.x, rotateHandle.y, handleSize, 0, Math.PI * 2);
-        this.cursorCtx.fill();
-        this.cursorCtx.fillStyle = '#ffffff';
-        this.cursorCtx.font = '10px sans-serif';
-        this.cursorCtx.textAlign = 'center';
-        this.cursorCtx.textBaseline = 'middle';
-        this.cursorCtx.fillText('\u21BB', rotateHandle.x, rotateHandle.y);
     }
 
     getRotateHandle() {
@@ -1063,12 +1219,6 @@ class DrawingApp {
             }
             return false;
         } else if (cmd.type === 'fill') {
-            for (const p of cmd.points) {
-                if (this.dist(mx, my, p.x, p.y) < hitRadius + 4) return true;
-            }
-            for (let i = 1; i < cmd.points.length; i++) {
-                if (this.distToSegment(mx, my, cmd.points[i - 1].x, cmd.points[i - 1].y, cmd.points[i].x, cmd.points[i].y) < hitRadius + 4) return true;
-            }
             return this.isPointInPolygon(mx, my, cmd.points);
         } else if (cmd.type === 'line') {
             return this.distToSegment(mx, my, cmd.x1, cmd.y1, cmd.x2, cmd.y2) < hitRadius;
@@ -1126,7 +1276,7 @@ class DrawingApp {
                 cmd.y2 += dy;
             }
         }
-        this.redrawActiveLayer();
+        this.viewportRender();
     }
 
     rotateSelected(angle) {
@@ -1154,7 +1304,7 @@ class DrawingApp {
                 cmd.y2 = cy + dx2 * sin + dy2 * cos;
             }
         }
-        this.redrawActiveLayer();
+        this.viewportRender();
     }
 
     resizeSelected(coords) {
@@ -1180,8 +1330,6 @@ class DrawingApp {
 
         const scaleX = newBBox.w / bbox.w;
         const scaleY = newBBox.h / bbox.h;
-        const transX = newBBox.x - bbox.x;
-        const transY = newBBox.y - bbox.y;
 
         for (const idx of this.selectedIndices) {
             const cmd = activeLayer.vectorCommands[idx];
@@ -1198,33 +1346,15 @@ class DrawingApp {
             }
         }
 
-        this.redrawActiveLayer();
+        this.viewportRender();
         this.selectionBBox = {
-            x: newBBox.x,
-            y: newBBox.y,
-            w: newBBox.w,
-            h: newBBox.h,
-            cx: newBBox.x + newBBox.w / 2,
-            cy: newBBox.y + newBBox.h / 2
+            x: newBBox.x, y: newBBox.y, w: newBBox.w, h: newBBox.h,
+            cx: newBBox.x + newBBox.w / 2, cy: newBBox.y + newBBox.h / 2
         };
-    }
-
-    redrawActiveLayer() {
-        const activeLayer = this.layers[this.activeLayerIndex];
-        const ctx = activeLayer.canvas.getContext('2d');
-        ctx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
-
-        for (const cmd of activeLayer.vectorCommands || []) {
-            this.redrawCommand(ctx, cmd);
-        }
-
-        this.render();
     }
 
     redrawCommand(ctx, cmd) {
         if (cmd.type === 'brush') {
-            ctx.globalCompositeOperation = 'source-over';
-            ctx.globalAlpha = cmd.opacity || 1;
             if (cmd.points.length < 2) {
                 ctx.fillStyle = cmd.color;
                 ctx.beginPath();
@@ -1242,11 +1372,7 @@ class DrawingApp {
                 }
                 ctx.stroke();
             }
-            ctx.globalAlpha = 1;
-            ctx.globalCompositeOperation = 'source-over';
         } else if (cmd.type === 'fill') {
-            ctx.globalCompositeOperation = 'source-over';
-            ctx.globalAlpha = cmd.opacity || 1;
             ctx.fillStyle = cmd.color;
             ctx.beginPath();
             if (cmd.points.length > 0) {
@@ -1257,38 +1383,27 @@ class DrawingApp {
                 ctx.closePath();
                 ctx.fill();
             }
-            ctx.globalAlpha = 1;
-            ctx.globalCompositeOperation = 'source-over';
         } else if (cmd.type === 'line') {
             ctx.strokeStyle = cmd.color;
             ctx.lineWidth = cmd.size;
             ctx.lineCap = 'round';
-            ctx.globalAlpha = cmd.opacity || 1;
             ctx.beginPath();
             ctx.moveTo(cmd.x1, cmd.y1);
             ctx.lineTo(cmd.x2, cmd.y2);
             ctx.stroke();
-            ctx.globalAlpha = 1;
         } else if (cmd.type === 'rect') {
             ctx.strokeStyle = cmd.color;
             ctx.lineWidth = cmd.size;
             ctx.lineJoin = 'round';
-            ctx.globalAlpha = cmd.opacity || 1;
             ctx.beginPath();
             ctx.rect(Math.min(cmd.x1, cmd.x2), Math.min(cmd.y1, cmd.y2), Math.abs(cmd.x2 - cmd.x1), Math.abs(cmd.y2 - cmd.y1));
             ctx.stroke();
-            ctx.globalAlpha = 1;
         } else if (cmd.type === 'circle') {
             ctx.strokeStyle = cmd.color;
             ctx.lineWidth = cmd.size;
-            ctx.globalAlpha = cmd.opacity || 1;
             ctx.beginPath();
             ctx.ellipse((cmd.x1 + cmd.x2) / 2, (cmd.y1 + cmd.y2) / 2, Math.abs(cmd.x2 - cmd.x1) / 2, Math.abs(cmd.y2 - cmd.y1) / 2, 0, 0, Math.PI * 2);
             ctx.stroke();
-            ctx.globalAlpha = 1;
-        } else if (cmd.type === 'fill') {
-            ctx.fillStyle = cmd.color;
-            ctx.fillRect(cmd.x, cmd.y, cmd.w, cmd.h);
         }
     }
 
@@ -1301,9 +1416,11 @@ class DrawingApp {
         y = Math.round(y);
         if (x < 0 || x >= this.canvasWidth || y < 0 || y >= this.canvasHeight) return;
 
-        this.render();
+        const temp = this.getTempCanvas(this.canvasWidth, this.canvasHeight);
+        const tempCtx = temp.getContext('2d');
+        this.renderAllToCtx(tempCtx, this.canvasWidth, this.canvasHeight);
 
-        const imageData = this.ctx.getImageData(0, 0, this.canvasWidth, this.canvasHeight);
+        const imageData = tempCtx.getImageData(0, 0, this.canvasWidth, this.canvasHeight);
         const data = imageData.data;
         const idx = (y * this.canvasWidth + x) * 4;
         const targetR = data[idx], targetG = data[idx + 1], targetB = data[idx + 2], targetA = data[idx + 3];
@@ -1357,7 +1474,7 @@ class DrawingApp {
             points: boundaryPoints
         };
         activeLayer.vectorCommands.splice(insertIndex, 0, fillCmd);
-        this.redrawActiveLayer();
+        this.viewportRender();
     }
 
     findFillInsertIndex(commands, boundaryPoints) {
@@ -1377,9 +1494,7 @@ class DrawingApp {
         if (boundaryHitCounts.size === 0) return commands.length;
         let minIndex = commands.length;
         for (const [ci, count] of boundaryHitCounts) {
-            if (count > 0 && ci < minIndex) {
-                minIndex = ci;
-            }
+            if (count > 0 && ci < minIndex) minIndex = ci;
         }
         return minIndex;
     }
@@ -1508,14 +1623,10 @@ class DrawingApp {
     addLayer(name) {
         this.clearSelection();
         this.layerCounter++;
-        const canvas = document.createElement('canvas');
-        canvas.width = this.canvasWidth;
-        canvas.height = this.canvasHeight;
 
         const layer = {
             id: this.layerCounter,
             name: name || `Layer ${this.layerCounter}`,
-            canvas: canvas,
             opacity: 1,
             blendMode: 'source-over',
             visible: true,
@@ -1524,11 +1635,12 @@ class DrawingApp {
 
         this.layers.unshift(layer);
         this.activeLayerIndex = 0;
-        this.render();
+        this.viewportRender();
         this.updateLayerPanel();
     }
 
     deleteActiveLayer() {
+        this.showPathEditControls(false);
         this.clearSelection();
         if (this.layers.length <= 1) return;
 
@@ -1536,7 +1648,7 @@ class DrawingApp {
         if (this.activeLayerIndex >= this.layers.length) {
             this.activeLayerIndex = this.layers.length - 1;
         }
-        this.render();
+        this.viewportRender();
         this.updateLayerPanel();
     }
 
@@ -1547,7 +1659,7 @@ class DrawingApp {
         this.layers[this.activeLayerIndex] = this.layers[this.activeLayerIndex - 1];
         this.layers[this.activeLayerIndex - 1] = temp;
         this.activeLayerIndex--;
-        this.render();
+        this.viewportRender();
         this.updateLayerPanel();
     }
 
@@ -1558,28 +1670,22 @@ class DrawingApp {
         this.layers[this.activeLayerIndex] = this.layers[this.activeLayerIndex + 1];
         this.layers[this.activeLayerIndex + 1] = temp;
         this.activeLayerIndex++;
-        this.render();
+        this.viewportRender();
         this.updateLayerPanel();
     }
 
     mergeDown() {
+        this.showPathEditControls(false);
         this.clearSelection();
         if (this.activeLayerIndex >= this.layers.length - 1) return;
 
         const upperLayer = this.layers[this.activeLayerIndex];
         const lowerLayer = this.layers[this.activeLayerIndex + 1];
 
-        const ctx = lowerLayer.canvas.getContext('2d');
-        ctx.globalAlpha = upperLayer.opacity;
-        ctx.globalCompositeOperation = upperLayer.blendMode;
-        ctx.drawImage(upperLayer.canvas, 0, 0);
-        ctx.globalAlpha = 1;
-        ctx.globalCompositeOperation = 'source-over';
-
         lowerLayer.vectorCommands = [...(lowerLayer.vectorCommands || []), ...(upperLayer.vectorCommands || [])];
 
         this.layers.splice(this.activeLayerIndex, 1);
-        this.render();
+        this.viewportRender();
         this.updateLayerPanel();
     }
 
@@ -1596,66 +1702,31 @@ class DrawingApp {
 
     setLayerOpacity(index, opacity) {
         this.layers[index].opacity = opacity;
-        this.render();
+        this.viewportRender();
     }
 
     setLayerBlendMode(index, blendMode) {
         this.layers[index].blendMode = blendMode;
-        this.render();
+        this.viewportRender();
     }
 
     clearActiveLayer() {
         this.saveState();
         this.clearSelection();
         const layer = this.layers[this.activeLayerIndex];
-        const ctx = layer.canvas.getContext('2d');
-        ctx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
         layer.vectorCommands = [];
-        this.render();
-    }
-
-    render() {
-        this.ctx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.fillRect(0, 0, this.canvasWidth, this.canvasHeight);
-
-        const dimOther = this.currentTool === 'select';
-
-        for (let i = this.layers.length - 1; i >= 0; i--) {
-            const layer = this.layers[i];
-            if (!layer.visible) continue;
-
-            let alpha = layer.opacity;
-            if (dimOther && i !== this.activeLayerIndex) {
-                alpha *= 0.5;
-            }
-
-            this.ctx.globalAlpha = alpha;
-            this.ctx.globalCompositeOperation = layer.blendMode;
-            this.ctx.drawImage(layer.canvas, 0, 0);
-        }
-
-        this.ctx.globalAlpha = 1;
-        this.ctx.globalCompositeOperation = 'source-over';
+        this.viewportRender();
     }
 
     saveState() {
-        const state = this.layers.map(layer => {
-            const canvas = document.createElement('canvas');
-            canvas.width = this.canvasWidth;
-            canvas.height = this.canvasHeight;
-            canvas.getContext('2d').drawImage(layer.canvas, 0, 0);
-
-            return {
-                id: layer.id,
-                name: layer.name,
-                imageData: canvas,
-                opacity: layer.opacity,
-                blendMode: layer.blendMode,
-                visible: layer.visible,
-                vectorCommands: JSON.parse(JSON.stringify(layer.vectorCommands || []))
-            };
-        });
+        const state = this.layers.map(layer => ({
+            id: layer.id,
+            name: layer.name,
+            opacity: layer.opacity,
+            blendMode: layer.blendMode,
+            visible: layer.visible,
+            vectorCommands: JSON.parse(JSON.stringify(layer.vectorCommands || []))
+        }));
 
         this.undoStack.push({
             layers: state,
@@ -1673,22 +1744,14 @@ class DrawingApp {
     undo() {
         if (this.undoStack.length === 0) return;
 
-        const currentState = this.layers.map(layer => {
-            const canvas = document.createElement('canvas');
-            canvas.width = this.canvasWidth;
-            canvas.height = this.canvasHeight;
-            canvas.getContext('2d').drawImage(layer.canvas, 0, 0);
-
-            return {
-                id: layer.id,
-                name: layer.name,
-                imageData: canvas,
-                opacity: layer.opacity,
-                blendMode: layer.blendMode,
-                visible: layer.visible,
-                vectorCommands: JSON.parse(JSON.stringify(layer.vectorCommands || []))
-            };
-        });
+        const currentState = this.layers.map(layer => ({
+            id: layer.id,
+            name: layer.name,
+            opacity: layer.opacity,
+            blendMode: layer.blendMode,
+            visible: layer.visible,
+            vectorCommands: JSON.parse(JSON.stringify(layer.vectorCommands || []))
+        }));
 
         this.redoStack.push({
             layers: currentState,
@@ -1703,22 +1766,14 @@ class DrawingApp {
     redo() {
         if (this.redoStack.length === 0) return;
 
-        const currentState = this.layers.map(layer => {
-            const canvas = document.createElement('canvas');
-            canvas.width = this.canvasWidth;
-            canvas.height = this.canvasHeight;
-            canvas.getContext('2d').drawImage(layer.canvas, 0, 0);
-
-            return {
-                id: layer.id,
-                name: layer.name,
-                imageData: canvas,
-                opacity: layer.opacity,
-                blendMode: layer.blendMode,
-                visible: layer.visible,
-                vectorCommands: JSON.parse(JSON.stringify(layer.vectorCommands || []))
-            };
-        });
+        const currentState = this.layers.map(layer => ({
+            id: layer.id,
+            name: layer.name,
+            opacity: layer.opacity,
+            blendMode: layer.blendMode,
+            visible: layer.visible,
+            vectorCommands: JSON.parse(JSON.stringify(layer.vectorCommands || []))
+        }));
 
         this.undoStack.push({
             layers: currentState,
@@ -1731,26 +1786,18 @@ class DrawingApp {
     }
 
     restoreState(state) {
-        this.layers = state.layers.map(s => {
-            const canvas = document.createElement('canvas');
-            canvas.width = this.canvasWidth;
-            canvas.height = this.canvasHeight;
-            canvas.getContext('2d').drawImage(s.imageData, 0, 0);
-
-            return {
-                id: s.id,
-                name: s.name,
-                canvas: canvas,
-                opacity: s.opacity,
-                blendMode: s.blendMode,
-                visible: s.visible,
-                vectorCommands: s.vectorCommands || []
-            };
-        });
+        this.layers = state.layers.map(s => ({
+            id: s.id,
+            name: s.name,
+            opacity: s.opacity,
+            blendMode: s.blendMode,
+            visible: s.visible,
+            vectorCommands: s.vectorCommands || []
+        }));
 
         this.activeLayerIndex = state.activeLayerIndex;
         this.clearSelection();
-        this.render();
+        this.viewportRender();
         this.updateLayerPanel();
     }
 
@@ -1768,35 +1815,32 @@ class DrawingApp {
             layerItem.className = 'layer-item' + (index === this.activeLayerIndex ? ' active' : '');
             layerItem.addEventListener('click', (e) => {
                 if (!e.target.closest('.layer-visibility') && !e.target.closest('.layer-name-input')) {
+                    this.showPathEditControls(false);
                     this.activeLayerIndex = index;
                     this.updateLayerPanel();
                     document.getElementById('layerOpacity').value = Math.round(layer.opacity * 100);
                     document.getElementById('layerOpacityValue').value = Math.round(layer.opacity * 100);
                     document.getElementById('layerBlendMode').value = layer.blendMode;
+                    this.viewportRender();
                 }
             });
 
             const visBtn = document.createElement('button');
             visBtn.className = 'layer-visibility';
-            visBtn.textContent = layer.visible ? '👁' : '👁‍🗨';
+            visBtn.textContent = layer.visible ? '\uD83D\uDC41' : '\uD83D\uDC41\u200D\uD83D\uDDE8';
             visBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 layer.visible = !layer.visible;
-                this.render();
+                this.viewportRender();
                 this.updateLayerPanel();
             });
             layerItem.appendChild(visBtn);
 
             const thumb = document.createElement('div');
             thumb.className = 'layer-thumb';
-            layerItem.appendChild(thumb);
-
-            const thumbCanvas = document.createElement('canvas');
-            thumbCanvas.width = 32;
-            thumbCanvas.height = 32;
-            const thumbCtx = thumbCanvas.getContext('2d');
-            thumbCtx.drawImage(layer.canvas, 0, 0, this.canvasWidth, this.canvasHeight, 0, 0, 32, 32);
+            const thumbCanvas = this.createLayerThumbnail(layer, 32, 32);
             thumb.appendChild(thumbCanvas);
+            layerItem.appendChild(thumb);
 
             const info = document.createElement('div');
             info.className = 'layer-info';
@@ -1813,6 +1857,26 @@ class DrawingApp {
         document.getElementById('layerOpacity').value = Math.round(this.layers[this.activeLayerIndex].opacity * 100);
         document.getElementById('layerOpacityValue').value = Math.round(this.layers[this.activeLayerIndex].opacity * 100);
         document.getElementById('layerBlendMode').value = this.layers[this.activeLayerIndex].blendMode;
+    }
+
+    createLayerThumbnail(layer, w, h) {
+        const canvas = this.getTempCanvas(w, h);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.scale(w / this.canvasWidth, h / this.canvasHeight);
+
+        for (const cmd of layer.vectorCommands || []) {
+            ctx.globalAlpha = cmd.opacity || 1;
+            this.redrawCommand(ctx, cmd);
+        }
+        ctx.globalAlpha = 1;
+
+        const display = document.createElement('canvas');
+        display.width = w;
+        display.height = h;
+        display.getContext('2d').drawImage(canvas, 0, 0);
+        return display;
     }
 
     editLayerName(index, nameElement) {
@@ -1840,9 +1904,13 @@ class DrawingApp {
     }
 
     exportImage() {
+        const temp = this.getTempCanvas(this.canvasWidth, this.canvasHeight);
+        const tempCtx = temp.getContext('2d');
+        this.renderAllToCtx(tempCtx, this.canvasWidth, this.canvasHeight);
+
         const link = document.createElement('a');
         link.download = 'drawing.png';
-        link.href = this.canvas.toDataURL('image/png');
+        link.href = temp.toDataURL('image/png');
         link.click();
     }
 
@@ -2014,16 +2082,15 @@ class DrawingApp {
                         }
                     }
                 }
-                this.renderLayer(0);
             }
         } else {
             this.addLayer('Imported SVG');
             const allElements = svg.children;
             this.parseSVGElements(allElements, this.layers[0].vectorCommands, scaleX, scaleY, vbX, vbY);
-            this.renderLayer(0);
         }
 
-        this.render();
+        this.showPathEditControls(false);
+        this.viewportRender();
         this.updateLayerPanel();
     }
 
@@ -2157,45 +2224,96 @@ class DrawingApp {
                 const y = (parseFloat(yAttr || '0') - vbY) * scaleY;
                 const w = parseFloat(wAttr || '0') * scaleX;
                 const h = parseFloat(el.getAttribute('height') || '0') * scaleY;
-                commands.push({
-                    type: 'rect',
-                    color: stroke || '#000000',
-                    size: strokeWidth * (scaleX + scaleY) / 2,
-                    opacity,
-                    x1: x,
-                    y1: y,
-                    x2: x + w,
-                    y2: y + h
-                });
+                const hasRectFill = fill && fill !== 'none';
+                const hasRectStroke = stroke && stroke !== 'none';
+                if (hasRectFill) {
+                    commands.push({
+                        type: 'fill',
+                        color: fill,
+                        opacity,
+                        points: [
+                            { x, y },
+                            { x: x + w, y },
+                            { x: x + w, y: y + h },
+                            { x, y: y + h }
+                        ]
+                    });
+                }
+                if (hasRectStroke) {
+                    commands.push({
+                        type: 'rect',
+                        color: stroke,
+                        size: strokeWidth * (scaleX + scaleY) / 2,
+                        opacity,
+                        x1: x, y1: y, x2: x + w, y2: y + h
+                    });
+                }
+                if (!hasRectFill && !hasRectStroke) {
+                    commands.push({
+                        type: 'rect',
+                        color: '#000000',
+                        size: strokeWidth * (scaleX + scaleY) / 2,
+                        opacity,
+                        x1: x, y1: y, x2: x + w, y2: y + h
+                    });
+                }
             } else if (tag === 'circle') {
                 const cx = (parseFloat(el.getAttribute('cx') || '0') - vbX) * scaleX;
                 const cy = (parseFloat(el.getAttribute('cy') || '0') - vbY) * scaleY;
                 const r = parseFloat(el.getAttribute('r') || '0') * scaleX;
-                commands.push({
-                    type: 'circle',
-                    color: stroke || '#000000',
-                    size: strokeWidth * (scaleX + scaleY) / 2,
-                    opacity,
-                    x1: cx - r,
-                    y1: cy - r,
-                    x2: cx + r,
-                    y2: cy + r
-                });
+                const hasCircleFill = fill && fill !== 'none';
+                const hasCircleStroke = stroke && stroke !== 'none';
+                if (hasCircleFill) {
+                    const fillPoints = [];
+                    for (let i = 0; i < 36; i++) {
+                        const a = (i / 36) * Math.PI * 2;
+                        fillPoints.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+                    }
+                    commands.push({
+                        type: 'fill', color: fill, opacity, points: fillPoints
+                    });
+                }
+                if (hasCircleStroke) {
+                    commands.push({
+                        type: 'circle', color: stroke, size: strokeWidth * (scaleX + scaleY) / 2, opacity,
+                        x1: cx - r, y1: cy - r, x2: cx + r, y2: cy + r
+                    });
+                }
+                if (!hasCircleFill && !hasCircleStroke) {
+                    commands.push({
+                        type: 'circle', color: '#000000', size: strokeWidth * (scaleX + scaleY) / 2, opacity,
+                        x1: cx - r, y1: cy - r, x2: cx + r, y2: cy + r
+                    });
+                }
             } else if (tag === 'ellipse') {
                 const cx = (parseFloat(el.getAttribute('cx') || '0') - vbX) * scaleX;
                 const cy = (parseFloat(el.getAttribute('cy') || '0') - vbY) * scaleY;
                 const rx = parseFloat(el.getAttribute('rx') || '0') * scaleX;
                 const ry = parseFloat(el.getAttribute('ry') || '0') * scaleY;
-                commands.push({
-                    type: 'circle',
-                    color: stroke || '#000000',
-                    size: strokeWidth * (scaleX + scaleY) / 2,
-                    opacity,
-                    x1: cx - rx,
-                    y1: cy - ry,
-                    x2: cx + rx,
-                    y2: cy + ry
-                });
+                const hasEllipseFill = fill && fill !== 'none';
+                const hasEllipseStroke = stroke && stroke !== 'none';
+                if (hasEllipseFill) {
+                    const fillPoints = [];
+                    for (let i = 0; i < 36; i++) {
+                        const a = (i / 36) * Math.PI * 2;
+                        fillPoints.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
+                    }
+                    commands.push({
+                        type: 'fill', color: fill, opacity, points: fillPoints
+                    });
+                }
+                if (hasEllipseStroke) {
+                    commands.push({
+                        type: 'circle', color: stroke, size: strokeWidth * (scaleX + scaleY) / 2, opacity,
+                        x1: cx - rx, y1: cy - ry, x2: cx + rx, y2: cy + ry
+                    });
+                }
+                if (!hasEllipseFill && !hasEllipseStroke) {
+                    commands.push({
+                        type: 'circle', color: '#000000', size: strokeWidth * (scaleX + scaleY) / 2, opacity,
+                        x1: cx - rx, y1: cy - ry, x2: cx + rx, y2: cy + ry
+                    });
+                }
             } else if (tag === 'line') {
                 const x1 = (parseFloat(el.getAttribute('x1') || '0') - vbX) * scaleX;
                 const y1 = (parseFloat(el.getAttribute('y1') || '0') - vbY) * scaleY;
@@ -2213,14 +2331,34 @@ class DrawingApp {
                 if (d) {
                     const points = this.parsePathD(d, scaleX, scaleY, vbX, vbY);
                     if (points.length > 0) {
-                        const isFillOnly = fill && (!stroke || stroke === 'none');
-                        commands.push({
-                            type: isFillOnly ? 'fill' : 'brush',
-                            color: isFillOnly ? fill : (stroke || fill || '#000000'),
-                            size: isFillOnly ? undefined : (strokeWidth * (scaleX + scaleY) / 2),
-                            opacity,
-                            points
-                        });
+                        const hasFill = fill && fill !== 'none';
+                        const hasStroke = stroke && stroke !== 'none';
+                        if (hasFill) {
+                            commands.push({
+                                type: 'fill',
+                                color: fill,
+                                opacity,
+                                points: [...points]
+                            });
+                        }
+                        if (hasStroke) {
+                            commands.push({
+                                type: 'brush',
+                                color: stroke,
+                                size: strokeWidth * (scaleX + scaleY) / 2,
+                                opacity,
+                                points: [...points]
+                            });
+                        }
+                        if (!hasFill && !hasStroke) {
+                            commands.push({
+                                type: 'brush',
+                                color: '#000000',
+                                size: strokeWidth * (scaleX + scaleY) / 2,
+                                opacity,
+                                points
+                            });
+                        }
                     }
                 }
             } else if (tag === 'polygon' || tag === 'polyline') {
@@ -2238,14 +2376,34 @@ class DrawingApp {
                         if (tag === 'polygon') {
                             parsedPoints.push({ ...parsedPoints[0] });
                         }
-                        const isFillOnly = fill && (!stroke || stroke === 'none');
-                        commands.push({
-                            type: isFillOnly ? 'fill' : 'brush',
-                            color: isFillOnly ? fill : (stroke || fill || '#000000'),
-                            size: isFillOnly ? undefined : (strokeWidth * (scaleX + scaleY) / 2),
-                            opacity,
-                            points: parsedPoints
-                        });
+                        const hasFill = fill && fill !== 'none';
+                        const hasStroke = stroke && stroke !== 'none';
+                        if (hasFill) {
+                            commands.push({
+                                type: 'fill',
+                                color: fill,
+                                opacity,
+                                points: [...parsedPoints]
+                            });
+                        }
+                        if (hasStroke) {
+                            commands.push({
+                                type: 'brush',
+                                color: stroke,
+                                size: strokeWidth * (scaleX + scaleY) / 2,
+                                opacity,
+                                points: [...parsedPoints]
+                            });
+                        }
+                        if (!hasFill && !hasStroke) {
+                            commands.push({
+                                type: 'brush',
+                                color: '#000000',
+                                size: strokeWidth * (scaleX + scaleY) / 2,
+                                opacity,
+                                points: parsedPoints
+                            });
+                        }
                     }
                 }
             }
@@ -2386,7 +2544,7 @@ class DrawingApp {
                     let i = 0;
                     while (i + 4 <= args.length) {
                         let rx = currentX, ry = currentY;
-                        if (prevCmd === 'C' || prevCmd === 'c') {
+                        if (prevCmd === 'C' || prevCmd === 'c' || prevCmd === 'S' || prevCmd === 's') {
                             rx = 2 * currentX - prevCpx2;
                             ry = 2 * currentY - prevCpy2;
                         }
@@ -2404,7 +2562,7 @@ class DrawingApp {
                     let i = 0;
                     while (i + 4 <= args.length) {
                         let rx = currentX, ry = currentY;
-                        if (prevCmd === 'C' || prevCmd === 'c') {
+                        if (prevCmd === 'C' || prevCmd === 'c' || prevCmd === 'S' || prevCmd === 's') {
                             rx = 2 * currentX - prevCpx2;
                             ry = 2 * currentY - prevCpy2;
                         }
@@ -2446,7 +2604,7 @@ class DrawingApp {
                     let i = 0;
                     while (i + 2 <= args.length) {
                         let rx = currentX, ry = currentY;
-                        if (prevCmd === 'Q' || prevCmd === 'q') {
+                        if (prevCmd === 'Q' || prevCmd === 'q' || prevCmd === 'T' || prevCmd === 't') {
                             rx = 2 * currentX - prevQcpx;
                             ry = 2 * currentY - prevQcpy;
                         }
@@ -2462,7 +2620,7 @@ class DrawingApp {
                     let i = 0;
                     while (i + 2 <= args.length) {
                         let rx = currentX, ry = currentY;
-                        if (prevCmd === 'Q' || prevCmd === 'q') {
+                        if (prevCmd === 'Q' || prevCmd === 'q' || prevCmd === 'T' || prevCmd === 't') {
                             rx = 2 * currentX - prevQcpx;
                             ry = 2 * currentY - prevQcpy;
                         }
@@ -2509,7 +2667,6 @@ class DrawingApp {
                 }
                 cmdType = token;
                 args = [];
-                prevCmd = token;
             } else {
                 args.push(Number(token));
             }
@@ -2592,16 +2749,6 @@ class DrawingApp {
         this.clearSelection();
     }
 
-    renderLayer(index) {
-        const layer = this.layers[index];
-        const ctx = layer.canvas.getContext('2d');
-        ctx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
-
-        for (const cmd of layer.vectorCommands || []) {
-            this.redrawCommand(ctx, cmd);
-        }
-    }
-
     getCSSBlendMode(blendMode) {
         const map = {
             'source-over': 'normal',
@@ -2629,8 +2776,9 @@ class DrawingApp {
         this.saveState();
         const activeLayer = this.layers[this.activeLayerIndex];
         activeLayer.vectorCommands = activeLayer.vectorCommands.filter((_, i) => !this.selectedIndices.includes(i));
+        this.showPathEditControls(false);
         this.clearSelection();
-        this.redrawActiveLayer();
+        this.viewportRender();
     }
 
     moveSelectedToLayer(targetIndex) {
@@ -2654,12 +2802,7 @@ class DrawingApp {
         targetLayer.vectorCommands.push(...selectedCommands);
         sourceLayer.vectorCommands = remainingIndices;
         this.clearSelection();
-        this.redrawActiveLayer();
-        targetLayer.canvas.getContext('2d').clearRect(0, 0, this.canvasWidth, this.canvasHeight);
-        for (const cmd of targetLayer.vectorCommands) {
-            this.redrawCommand(targetLayer.canvas.getContext('2d'), cmd);
-        }
-        this.render();
+        this.viewportRender();
         this.updateLayerPanel();
     }
 
@@ -2674,18 +2817,14 @@ class DrawingApp {
         layer.vectorCommands.forEach((cmd, i) => {
             if (this.selectedIndices.includes(i)) {
                 if (cmd.type === 'brush' || cmd.type === 'fill') {
-                    for (const p of cmd.points) {
-                        p.x += offset;
-                    }
+                    for (const p of cmd.points) p.x += offset;
                 } else {
-                    cmd.x1 += offset;
-                    cmd.x2 += offset;
+                    cmd.x1 += offset; cmd.x2 += offset;
                 }
             }
         });
-        this.redrawActiveLayer();
+        this.viewportRender();
         this.updateSelectionBBox();
-        this.drawSelection();
     }
 
     centerSelectionVertical() {
@@ -2699,18 +2838,14 @@ class DrawingApp {
         layer.vectorCommands.forEach((cmd, i) => {
             if (this.selectedIndices.includes(i)) {
                 if (cmd.type === 'brush' || cmd.type === 'fill') {
-                    for (const p of cmd.points) {
-                        p.y += offset;
-                    }
+                    for (const p of cmd.points) p.y += offset;
                 } else {
-                    cmd.y1 += offset;
-                    cmd.y2 += offset;
+                    cmd.y1 += offset; cmd.y2 += offset;
                 }
             }
         });
-        this.redrawActiveLayer();
+        this.viewportRender();
         this.updateSelectionBBox();
-        this.drawSelection();
     }
 
     handleKeyboard(e) {
@@ -2719,6 +2854,15 @@ class DrawingApp {
         if (e.key === 'F2') {
             e.preventDefault();
             this.renameActiveLayer();
+            return;
+        }
+
+        if (e.key === 'Escape') {
+            if (this.pathEditMode) {
+                e.preventDefault();
+                this.showPathEditControls(false);
+                this.viewportRender();
+            }
             return;
         }
 
@@ -2754,10 +2898,48 @@ class DrawingApp {
                     this.selectedCommands = [...activeLayer.vectorCommands];
                     this.updateSelectionBBox();
                     this.updateDeleteButton();
-                    this.render();
-                    this.drawSelection();
+                    this.viewportRender();
                 }
+            } else if (e.key === '0') {
+                e.preventDefault();
+                this.fitCanvasToContainer();
             }
+            return;
+        }
+
+        if (e.key === '+' || e.key === '=' || e.key === 'NumpadAdd') {
+            const factor = 1.15;
+            const newZoom = Math.min(50, this.zoom * factor);
+            if (newZoom === this.zoom) return;
+            const dpr = window.devicePixelRatio || 1;
+            const vpCSSW = this.viewportCanvas.width / dpr;
+            const vpCSSH = this.viewportCanvas.height / dpr;
+            const baseOffX = (vpCSSW - this.canvasCSSWidth) / 2;
+            const baseOffY = (vpCSSH - this.canvasCSSHeight) / 2;
+            const relX = vpCSSW / 2 - baseOffX;
+            const relY = vpCSSH / 2 - baseOffY;
+            this.panX = relX - (relX - this.panX) * (newZoom / this.zoom);
+            this.panY = relY - (relY - this.panY) * (newZoom / this.zoom);
+            this.zoom = newZoom;
+            this.applyTransform();
+            return;
+        }
+
+        if (e.key === '-' || e.key === 'NumpadSubtract') {
+            const factor = 1 / 1.15;
+            const newZoom = Math.max(1, this.zoom * factor);
+            if (newZoom === this.zoom) return;
+            const dpr = window.devicePixelRatio || 1;
+            const vpCSSW = this.viewportCanvas.width / dpr;
+            const vpCSSH = this.viewportCanvas.height / dpr;
+            const baseOffX = (vpCSSW - this.canvasCSSWidth) / 2;
+            const baseOffY = (vpCSSH - this.canvasCSSHeight) / 2;
+            const relX = vpCSSW / 2 - baseOffX;
+            const relY = vpCSSH / 2 - baseOffY;
+            this.panX = relX - (relX - this.panX) * (newZoom / this.zoom);
+            this.panY = relY - (relY - this.panY) * (newZoom / this.zoom);
+            this.zoom = newZoom;
+            this.applyTransform();
             return;
         }
 
@@ -2829,14 +3011,13 @@ class DrawingApp {
         }
 
         document.getElementById('pathEditControls').style.display = 'flex';
-        this.render();
-        this.drawSelection();
+        this.viewportRender();
     }
 
     toggleAddPointMode() {
         this.addPointMode = !this.addPointMode;
         document.getElementById('addPointBtn').classList.toggle('active', this.addPointMode);
-        this.drawSelection();
+        this.viewportRender();
     }
 
     deleteSelectedPoint() {
@@ -2851,7 +3032,7 @@ class DrawingApp {
             this.selectedPointIndex = Math.min(this.selectedPointIndex, this.editingPathCmd.points.length - 1);
         }
 
-        this.redrawActiveLayer();
+        this.viewportRender();
     }
 
     exitPathEditMode() {
@@ -2872,12 +3053,11 @@ class DrawingApp {
         }
     }
 
-    drawPathEditPoints() {
+    drawPathEditPoints(ctx) {
         if (!this.pathEditMode || !this.editingPathCmd) return;
 
         const points = this.editingPathCmd.points;
         const pointRadius = 5;
-        const handleRadius = 4;
 
         for (let i = 0; i < points.length; i++) {
             const p = points[i];
@@ -2885,25 +3065,25 @@ class DrawingApp {
             const isHovered = i === this.hoveredPointIndex;
             const radius = isSelected || isHovered ? pointRadius + 2 : pointRadius;
 
-            this.cursorCtx.fillStyle = isSelected ? '#ff6b35' : '#ffffff';
-            this.cursorCtx.strokeStyle = isSelected ? '#ff6b35' : '#4a9eff';
-            this.cursorCtx.lineWidth = 2;
+            ctx.fillStyle = isSelected ? '#ff6b35' : '#ffffff';
+            ctx.strokeStyle = isSelected ? '#ff6b35' : '#4a9eff';
+            ctx.lineWidth = 2;
 
-            this.cursorCtx.beginPath();
-            this.cursorCtx.arc(p.x, p.y, radius, 0, Math.PI * 2);
-            this.cursorCtx.fill();
-            this.cursorCtx.stroke();
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
 
             if (i < points.length - 1) {
                 const next = points[i + 1];
-                this.cursorCtx.strokeStyle = '#4a9eff';
-                this.cursorCtx.lineWidth = 1;
-                this.cursorCtx.setLineDash([2, 2]);
-                this.cursorCtx.beginPath();
-                this.cursorCtx.moveTo(p.x, p.y);
-                this.cursorCtx.lineTo(next.x, next.y);
-                this.cursorCtx.stroke();
-                this.cursorCtx.setLineDash([]);
+                ctx.strokeStyle = '#4a9eff';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([2, 2]);
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y);
+                ctx.lineTo(next.x, next.y);
+                ctx.stroke();
+                ctx.setLineDash([]);
             }
         }
 
@@ -2915,20 +3095,20 @@ class DrawingApp {
                 const mx = (p1.x + p2.x) / 2;
                 const my = (p1.y + p2.y) / 2;
 
-                this.cursorCtx.fillStyle = '#4a9eff';
-                this.cursorCtx.strokeStyle = '#ffffff';
-                this.cursorCtx.lineWidth = 2;
+                ctx.fillStyle = '#4a9eff';
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
 
-                this.cursorCtx.beginPath();
-                this.cursorCtx.arc(mx, my, 7, 0, Math.PI * 2);
-                this.cursorCtx.fill();
-                this.cursorCtx.stroke();
+                ctx.beginPath();
+                ctx.arc(mx, my, 7, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
 
-                this.cursorCtx.fillStyle = '#ffffff';
-                this.cursorCtx.font = 'bold 10px sans-serif';
-                this.cursorCtx.textAlign = 'center';
-                this.cursorCtx.textBaseline = 'middle';
-                this.cursorCtx.fillText('+', mx, my);
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 10px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('+', mx, my);
             }
         }
     }
@@ -2941,9 +3121,7 @@ class DrawingApp {
 
         for (let i = 0; i < points.length; i++) {
             const p = points[i];
-            if (this.dist(mx, my, p.x, p.y) < hitRadius) {
-                return i;
-            }
+            if (this.dist(mx, my, p.x, p.y) < hitRadius) return i;
         }
 
         return -1;
@@ -2958,9 +3136,7 @@ class DrawingApp {
         for (let i = 0; i < points.length - 1; i++) {
             const p1 = points[i];
             const p2 = points[i + 1];
-            if (this.distToSegment(mx, my, p1.x, p1.y, p2.x, p2.y) < hitRadius) {
-                return i;
-            }
+            if (this.distToSegment(mx, my, p1.x, p1.y, p2.x, p2.y) < hitRadius) return i;
         }
 
         return -1;
@@ -2973,7 +3149,7 @@ class DrawingApp {
         const idx = this.hoveredSegmentIndex;
         this.editingPathCmd.points.splice(idx + 1, 0, { x: mx, y: my });
         this.selectedPointIndex = idx + 1;
-        this.redrawActiveLayer();
+        this.viewportRender();
     }
 
     moveSelectedPoint(dx, dy) {
@@ -2982,7 +3158,7 @@ class DrawingApp {
         const point = this.editingPathCmd.points[this.selectedPointIndex];
         point.x += dx;
         point.y += dy;
-        this.redrawActiveLayer();
+        this.viewportRender();
     }
 
     handlePathEditMouseDown(e, coords) {
@@ -2996,19 +3172,18 @@ class DrawingApp {
                 this.editingPathCmd.points.splice(pointIdx, 1);
                 if (this.editingPathCmd.points.length === 0) {
                     this.exitPathEditMode();
-                    this.redrawActiveLayer();
+                    this.viewportRender();
                     return true;
                 }
                 this.selectedPointIndex = Math.min(pointIdx, this.editingPathCmd.points.length - 1);
-                this.redrawActiveLayer();
+                this.viewportRender();
                 return true;
             }
 
             this.saveState();
             this.selectedPointIndex = pointIdx;
             this.isDraggingPoint = true;
-            this.render();
-            this.drawSelection();
+            this.viewportRender();
             return true;
         }
 
@@ -3021,8 +3196,7 @@ class DrawingApp {
         }
 
         this.selectedPointIndex = -1;
-        this.render();
-        this.drawSelection();
+        this.viewportRender();
         return true;
     }
 
@@ -3038,8 +3212,7 @@ class DrawingApp {
             const dy = coords.y - this.lastPathPoint.y;
             this.moveSelectedPoint(dx, dy);
             this.lastPathPoint = { x: coords.x, y: coords.y };
-            this.render();
-            this.drawSelection();
+            this.viewportRender();
             return true;
         }
 
@@ -3049,9 +3222,8 @@ class DrawingApp {
         if (pointIdx !== this.hoveredPointIndex || segIdx !== this.hoveredSegmentIndex) {
             this.hoveredPointIndex = pointIdx;
             this.hoveredSegmentIndex = segIdx;
-            this.canvas.style.cursor = pointIdx >= 0 ? 'move' : (this.addPointMode && segIdx >= 0 ? 'copy' : 'pointer');
-            this.render();
-            this.drawSelection();
+            this.viewportCanvas.style.cursor = pointIdx >= 0 ? 'move' : (this.addPointMode && segIdx >= 0 ? 'copy' : 'pointer');
+            this.viewportRender();
         }
 
         return false;

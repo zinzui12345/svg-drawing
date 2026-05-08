@@ -97,7 +97,7 @@
 
         <div class="main-content">
             <div class="canvas-container" id="canvasContainer">
-                <canvas id="mainCanvas"></canvas>
+                <canvas id="viewportCanvas"></canvas>
             </div>
 
             <aside class="layer-panel">
@@ -154,6 +154,14 @@
                     </select>
                 </div>
                 <div class="layer-list" id="layerList"></div>
+                <div class="layer-opacity" style="margin-top:8px;">
+                    <label>Zoom</label>
+                    <div style="display:flex;align-items:center;gap:4px;">
+                        <input type="range" id="zoomSlider" min="100" max="5000" value="100" style="flex:1;">
+                        <input type="number" id="zoomValue" class="spinbox" min="100" max="5000" value="100" style="width:48px;">
+                        <button class="layer-btn" id="resetZoomBtn" title="Reset Zoom (Ctrl+0)" style="width:24px;height:24px;font-size:12px;">1:1</button>
+                    </div>
+                </div>
             </aside>
         </div>
     </div>
