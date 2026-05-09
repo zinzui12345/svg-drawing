@@ -27,9 +27,14 @@
                 </button>
             </div>
             <div class="tool-group" id="pathEditControls" style="display:none;">
-                <button class="action-btn" id="pathEditBtn" title="Edit Path">
+                <button class="action-btn" id="pathEditBtn" title="Edit Path (E)">
                     <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM5.92 19H2v-3.92L17.07 1.93l3.92 3.92L5.92 19z"/></svg>
                 </button>
+                <select id="pointTypeSelect" style="display:none;font-size:12px;padding:2px 4px;border-radius:4px;border:1px solid #444;background:#2a2a3a;color:#ccc;width:80px;">
+                    <option value="corner">Corner</option>
+                    <option value="smooth">Smooth</option>
+                    <option value="symmetric">Symmetric</option>
+                </select>
                 <button class="action-btn" id="addPointBtn" title="Add Point">
                     <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
                 </button>

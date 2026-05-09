@@ -42,6 +42,8 @@ class DrawingApp {
         this.isSelecting = false;
         this.isPanning = false;
         this.panStart = { x: 0, y: 0 };
+        this.isZooming = false;
+        this.zoomStartY = 0;
         this.selectMode = null;
         this.selectStart = null;
         this.selectDragOffset = null;
@@ -57,6 +59,8 @@ class DrawingApp {
         this.addPointMode = false;
         this.hoveredPointIndex = -1;
         this.hoveredSegmentIndex = -1;
+        this.hoveredHandle = null;
+        this.draggedHandle = null;
 
         this.init();
     }
@@ -297,6 +301,87 @@ class DrawingApp {
         document.getElementById('pathEditBtn').addEventListener('click', () => this.togglePathEdit());
         document.getElementById('addPointBtn').addEventListener('click', () => this.toggleAddPointMode());
         document.getElementById('deletePointBtn').addEventListener('click', () => this.deleteSelectedPoint());
+        document.getElementById('pointTypeSelect').addEventListener('change', (e) => {
+            if (!this.pathEditMode || this.selectedPointIndex < 0 || !this.editingPathCmd) return;
+            const type = e.target.value;
+            const points = this.editingPathCmd.points;
+            const idx = this.selectedPointIndex;
+            const point = points[idx];
+            this.saveState();
+            point.type = type;
+
+            if (type === 'corner') {
+                delete point.cp1x;
+                delete point.cp1y;
+                delete point.cp2x;
+                delete point.cp2y;
+                if (idx > 0 && (points[idx - 1].type === undefined || points[idx - 1].type === 'corner')) {
+                    delete points[idx - 1].cp2x;
+                    delete points[idx - 1].cp2y;
+                    if (points[idx - 1].type === 'corner') {
+                        delete points[idx - 1].cp1x;
+                        delete points[idx - 1].cp1y;
+                    }
+                }
+                if (idx < points.length - 1 && (points[idx + 1].type === undefined || points[idx + 1].type === 'corner')) {
+                    delete points[idx + 1].cp1x;
+                    delete points[idx + 1].cp1y;
+                    if (points[idx + 1].type === 'corner') {
+                        delete points[idx + 1].cp2x;
+                        delete points[idx + 1].cp2y;
+                    }
+                }
+            } else if (type === 'smooth') {
+                if (point.cp1x === undefined && point.cp2x !== undefined) {
+                    point.cp1x = 2 * point.x - point.cp2x;
+                    point.cp1y = 2 * point.y - point.cp2y;
+                } else if (point.cp2x === undefined && point.cp1x !== undefined) {
+                    point.cp2x = 2 * point.x - point.cp1x;
+                    point.cp2y = 2 * point.y - point.cp1y;
+                } else if (point.cp1x !== undefined && point.cp2x !== undefined) {
+                    const dx = point.cp1x - point.x, dy = point.cp1y - point.y;
+                    point.cp2x = point.x - dx; point.cp2y = point.y - dy;
+                } else {
+                    point.cp1x = point.x - 20; point.cp1y = point.y;
+                    point.cp2x = point.x + 20; point.cp2y = point.y;
+                }
+            } else if (type === 'symmetric') {
+                if (point.cp1x === undefined && point.cp2x !== undefined) {
+                    point.cp1x = 2 * point.x - point.cp2x;
+                    point.cp1y = 2 * point.y - point.cp2y;
+                } else if (point.cp2x === undefined && point.cp1x !== undefined) {
+                    point.cp2x = 2 * point.x - point.cp1x;
+                    point.cp2y = 2 * point.y - point.cp1y;
+                } else if (point.cp1x !== undefined && point.cp2x !== undefined) {
+                    const d1 = Math.hypot(point.cp1x - point.x, point.cp1y - point.y);
+                    const d2 = Math.hypot(point.cp2x - point.x, point.cp2y - point.y);
+                    const avg = (d1 + d2) / 2;
+                    const dx = point.cp1x - point.x, dy = point.cp1y - point.y;
+                    const len = Math.hypot(dx, dy) || 1;
+                    const nx = dx / len, ny = dy / len;
+                    point.cp1x = point.x + nx * avg; point.cp1y = point.y + ny * avg;
+                    point.cp2x = point.x - nx * avg; point.cp2y = point.y - ny * avg;
+                } else {
+                    point.cp1x = point.x - 20; point.cp1y = point.y;
+                    point.cp2x = point.x + 20; point.cp2y = point.y;
+                }
+            }
+
+            if (type !== 'corner') {
+                if (idx > 0 && points[idx - 1].cp2x === undefined) {
+                    const prev = points[idx - 1];
+                    prev.cp2x = prev.x + (point.x - prev.x) / 3;
+                    prev.cp2y = prev.y + (point.y - prev.y) / 3;
+                }
+                if (idx < points.length - 1 && points[idx + 1].cp1x === undefined) {
+                    const next = points[idx + 1];
+                    next.cp1x = next.x + (point.x - next.x) / 3;
+                    next.cp1y = next.y + (point.y - next.y) / 3;
+                }
+            }
+
+            this.viewportRender();
+        });
         document.getElementById('deleteSelectedBtn').addEventListener('click', () => this.deleteSelected());
 
         document.getElementById('moveToLayerSelect').addEventListener('change', (e) => {
@@ -416,7 +501,13 @@ class DrawingApp {
                     ctx.beginPath();
                     ctx.moveTo(pts[0].x, pts[0].y);
                     for (let i = 1; i < pts.length; i++) {
-                        ctx.lineTo(pts[i].x, pts[i].y);
+                        const prev = pts[i - 1];
+                        const curr = pts[i];
+                        if (prev.cp2x !== undefined && curr.cp1x !== undefined) {
+                            ctx.bezierCurveTo(prev.cp2x, prev.cp2y, curr.cp1x, curr.cp1y, curr.x, curr.y);
+                        } else {
+                            ctx.lineTo(curr.x, curr.y);
+                        }
                     }
                     ctx.stroke();
                 }
@@ -517,7 +608,11 @@ class DrawingApp {
     }
 
     handleContainerMouseDown(e) {
-        if (e.button === 1) {
+        if (e.button === 1 && e.ctrlKey) {
+            e.preventDefault();
+            this.isZooming = true;
+            this.zoomStartY = e.clientY;
+        } else if (e.button === 1) {
             e.preventDefault();
             this.isPanning = true;
             this.panStart = { x: e.clientX - this.panX, y: e.clientY - this.panY };
@@ -805,6 +900,27 @@ class DrawingApp {
     }
 
     handleMouseMove(e) {
+        if (this.isZooming) {
+            const dy = this.zoomStartY - e.clientY;
+            if (Math.abs(dy) > 2) {
+                const delta = dy * 0.003;
+                const factor = 1 + delta;
+                const newZoom = Math.max(1, Math.min(50, this.zoom * factor));
+                if (newZoom !== this.zoom) {
+                    const vpRect = this.viewportCanvas.getBoundingClientRect();
+                    const baseOffX = (vpRect.width - this.canvasCSSWidth) / 2;
+                    const baseOffY = (vpRect.height - this.canvasCSSHeight) / 2;
+                    const mx = vpRect.width / 2 - baseOffX;
+                    const my = vpRect.height / 2 - baseOffY;
+                    this.panX = mx - (mx - this.panX) * (newZoom / this.zoom);
+                    this.panY = my - (my - this.panY) * (newZoom / this.zoom);
+                    this.zoom = newZoom;
+                    this.applyTransform();
+                }
+                this.zoomStartY = e.clientY;
+            }
+            return;
+        }
         if (this.isPanning) {
             this.panX = e.clientX - this.panStart.x;
             this.panY = e.clientY - this.panStart.y;
@@ -845,6 +961,10 @@ class DrawingApp {
     }
 
     handleMouseUp(e) {
+        if (this.isZooming) {
+            this.isZooming = false;
+            return;
+        }
         if (this.isPanning) {
             this.isPanning = false;
             return;
@@ -902,7 +1022,18 @@ class DrawingApp {
 
     handleMouseLeave(e) {
         this.isPanning = false;
+        this.isZooming = false;
         this.mouseOnCanvas = false;
+        if (this.pathEditMode) {
+            this.isDraggingPoint = false;
+            this.lastPathPoint = null;
+            this.draggedHandle = null;
+            this.hoveredHandle = null;
+            this.hoveredPointIndex = -1;
+            this.hoveredSegmentIndex = -1;
+            this.viewportRender();
+            return;
+        }
         if (this.isDrawing) {
             const activeLayer = this.layers[this.activeLayerIndex];
             if (this.currentStroke && this.currentStroke.points.length > 0) {
@@ -1182,6 +1313,10 @@ class DrawingApp {
                 minY = Math.min(minY, p.y);
                 maxX = Math.max(maxX, p.x);
                 maxY = Math.max(maxY, p.y);
+                if (p.cp1x !== undefined) { minX = Math.min(minX, p.cp1x); maxX = Math.max(maxX, p.cp1x); }
+                if (p.cp1y !== undefined) { minY = Math.min(minY, p.cp1y); maxY = Math.max(maxY, p.cp1y); }
+                if (p.cp2x !== undefined) { minX = Math.min(minX, p.cp2x); maxX = Math.max(maxX, p.cp2x); }
+                if (p.cp2y !== undefined) { minY = Math.min(minY, p.cp2y); maxY = Math.max(maxY, p.cp2y); }
             }
             return { minX: minX - margin, minY: minY - margin, maxX: maxX + margin, maxY: maxY + margin };
         } else if (cmd.type === 'line') {
@@ -1268,6 +1403,8 @@ class DrawingApp {
                 for (const p of cmd.points) {
                     p.x += dx;
                     p.y += dy;
+                    if (p.cp1x !== undefined) { p.cp1x += dx; p.cp1y += dy; }
+                    if (p.cp2x !== undefined) { p.cp2x += dx; p.cp2y += dy; }
                 }
             } else {
                 cmd.x1 += dx;
@@ -1290,10 +1427,19 @@ class DrawingApp {
             const cmd = activeLayer.vectorCommands[idx];
             if (cmd.type === 'brush' || cmd.type === 'fill') {
                 for (const p of cmd.points) {
-                    const dx = p.x - cx;
-                    const dy = p.y - cy;
+                    const dx = p.x - cx, dy = p.y - cy;
                     p.x = cx + dx * cos - dy * sin;
                     p.y = cy + dx * sin + dy * cos;
+                    if (p.cp1x !== undefined) {
+                        const cdx = p.cp1x - cx, cdy = p.cp1y - cy;
+                        p.cp1x = cx + cdx * cos - cdy * sin;
+                        p.cp1y = cy + cdx * sin + cdy * cos;
+                    }
+                    if (p.cp2x !== undefined) {
+                        const cdx = p.cp2x - cx, cdy = p.cp2y - cy;
+                        p.cp2x = cx + cdx * cos - cdy * sin;
+                        p.cp2y = cy + cdx * sin + cdy * cos;
+                    }
                 }
             } else {
                 const dx1 = cmd.x1 - cx, dy1 = cmd.y1 - cy;
@@ -1337,6 +1483,14 @@ class DrawingApp {
                 for (const p of cmd.points) {
                     p.x = newBBox.x + (p.x - bbox.x) * scaleX;
                     p.y = newBBox.y + (p.y - bbox.y) * scaleY;
+                    if (p.cp1x !== undefined) {
+                        p.cp1x = newBBox.x + (p.cp1x - bbox.x) * scaleX;
+                        p.cp1y = newBBox.y + (p.cp1y - bbox.y) * scaleY;
+                    }
+                    if (p.cp2x !== undefined) {
+                        p.cp2x = newBBox.x + (p.cp2x - bbox.x) * scaleX;
+                        p.cp2y = newBBox.y + (p.cp2y - bbox.y) * scaleY;
+                    }
                 }
             } else {
                 cmd.x1 = newBBox.x + (cmd.x1 - bbox.x) * scaleX;
@@ -1368,7 +1522,13 @@ class DrawingApp {
                 ctx.beginPath();
                 ctx.moveTo(cmd.points[0].x, cmd.points[0].y);
                 for (let i = 1; i < cmd.points.length; i++) {
-                    ctx.lineTo(cmd.points[i].x, cmd.points[i].y);
+                    const prev = cmd.points[i - 1];
+                    const curr = cmd.points[i];
+                    if (prev.cp2x !== undefined && curr.cp1x !== undefined) {
+                        ctx.bezierCurveTo(prev.cp2x, prev.cp2y, curr.cp1x, curr.cp1y, curr.x, curr.y);
+                    } else {
+                        ctx.lineTo(curr.x, curr.y);
+                    }
                 }
                 ctx.stroke();
             }
@@ -1378,7 +1538,13 @@ class DrawingApp {
             if (cmd.points.length > 0) {
                 ctx.moveTo(cmd.points[0].x, cmd.points[0].y);
                 for (let i = 1; i < cmd.points.length; i++) {
-                    ctx.lineTo(cmd.points[i].x, cmd.points[i].y);
+                    const prev = cmd.points[i - 1];
+                    const curr = cmd.points[i];
+                    if (prev.cp2x !== undefined && curr.cp1x !== undefined) {
+                        ctx.bezierCurveTo(prev.cp2x, prev.cp2y, curr.cp1x, curr.cp1y, curr.x, curr.y);
+                    } else {
+                        ctx.lineTo(curr.x, curr.y);
+                    }
                 }
                 ctx.closePath();
                 ctx.fill();
@@ -1641,6 +1807,7 @@ class DrawingApp {
 
     deleteActiveLayer() {
         this.showPathEditControls(false);
+        this.saveState();
         this.clearSelection();
         if (this.layers.length <= 1) return;
 
@@ -1659,6 +1826,7 @@ class DrawingApp {
         this.layers[this.activeLayerIndex] = this.layers[this.activeLayerIndex - 1];
         this.layers[this.activeLayerIndex - 1] = temp;
         this.activeLayerIndex--;
+        this.clearSelection();
         this.viewportRender();
         this.updateLayerPanel();
     }
@@ -1670,12 +1838,14 @@ class DrawingApp {
         this.layers[this.activeLayerIndex] = this.layers[this.activeLayerIndex + 1];
         this.layers[this.activeLayerIndex + 1] = temp;
         this.activeLayerIndex++;
+        this.clearSelection();
         this.viewportRender();
         this.updateLayerPanel();
     }
 
     mergeDown() {
         this.showPathEditControls(false);
+        this.saveState();
         this.clearSelection();
         if (this.activeLayerIndex >= this.layers.length - 1) return;
 
@@ -1742,6 +1912,7 @@ class DrawingApp {
     }
 
     undo() {
+        if (this.pathEditMode) this.togglePathEdit();
         if (this.undoStack.length === 0) return;
 
         const currentState = this.layers.map(layer => ({
@@ -1764,6 +1935,7 @@ class DrawingApp {
     }
 
     redo() {
+        if (this.pathEditMode) this.togglePathEdit();
         if (this.redoStack.length === 0) return;
 
         const currentState = this.layers.map(layer => ({
@@ -1815,7 +1987,7 @@ class DrawingApp {
             layerItem.className = 'layer-item' + (index === this.activeLayerIndex ? ' active' : '');
             layerItem.addEventListener('click', (e) => {
                 if (!e.target.closest('.layer-visibility') && !e.target.closest('.layer-name-input')) {
-                    this.showPathEditControls(false);
+                    if (this.pathEditMode) this.togglePathEdit();
                     this.activeLayerIndex = index;
                     this.updateLayerPanel();
                     document.getElementById('layerOpacity').value = Math.round(layer.opacity * 100);
@@ -1945,14 +2117,26 @@ class DrawingApp {
                         } else {
                             let d = `M ${cmd.points[0].x.toFixed(2)} ${cmd.points[0].y.toFixed(2)}`;
                             for (let i = 1; i < cmd.points.length; i++) {
-                                d += ` L ${cmd.points[i].x.toFixed(2)} ${cmd.points[i].y.toFixed(2)}`;
+                                const prev = cmd.points[i - 1];
+                                const curr = cmd.points[i];
+                                if (prev.cp2x !== undefined && curr.cp1x !== undefined) {
+                                    d += ` C ${prev.cp2x.toFixed(2)} ${prev.cp2y.toFixed(2)} ${curr.cp1x.toFixed(2)} ${curr.cp1y.toFixed(2)} ${curr.x.toFixed(2)} ${curr.y.toFixed(2)}`;
+                                } else {
+                                    d += ` L ${curr.x.toFixed(2)} ${curr.y.toFixed(2)}`;
+                                }
                             }
                             svgParts.push(`    <path d="${d}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="${cmd.opacity}"/>`);
                         }
                     } else if (cmd.type === 'fill') {
                         let d = `M ${cmd.points[0].x.toFixed(2)} ${cmd.points[0].y.toFixed(2)}`;
                         for (let i = 1; i < cmd.points.length; i++) {
-                            d += ` L ${cmd.points[i].x.toFixed(2)} ${cmd.points[i].y.toFixed(2)}`;
+                            const prev = cmd.points[i - 1];
+                            const curr = cmd.points[i];
+                            if (prev.cp2x !== undefined && curr.cp1x !== undefined) {
+                                d += ` C ${prev.cp2x.toFixed(2)} ${prev.cp2y.toFixed(2)} ${curr.cp1x.toFixed(2)} ${curr.cp1y.toFixed(2)} ${curr.x.toFixed(2)} ${curr.y.toFixed(2)}`;
+                            } else {
+                                d += ` L ${curr.x.toFixed(2)} ${curr.y.toFixed(2)}`;
+                            }
                         }
                         d += ' Z';
                         svgParts.push(`    <path d="${d}" fill="${cmd.color}" stroke="none" opacity="${cmd.opacity}"/>`);
@@ -2002,6 +2186,9 @@ class DrawingApp {
     }
 
     loadSVG(svgContent) {
+        if (this.pathEditMode) this.togglePathEdit();
+        this.fitCanvasToContainer();
+
         const parser = new DOMParser();
         const doc = parser.parseFromString(svgContent, 'image/svg+xml');
 
@@ -2089,7 +2276,6 @@ class DrawingApp {
             this.parseSVGElements(allElements, this.layers[0].vectorCommands, scaleX, scaleY, vbX, vbY);
         }
 
-        this.showPathEditControls(false);
         this.viewportRender();
         this.updateLayerPanel();
     }
@@ -2422,8 +2608,6 @@ class DrawingApp {
         let cmdType = '';
         let args = [];
 
-        const curveSamples = 20;
-
         const pushPoint = (svgX, svgY) => {
             points.push({
                 x: (svgX - vbX) * scaleX,
@@ -2431,30 +2615,6 @@ class DrawingApp {
             });
             currentX = svgX;
             currentY = svgY;
-        };
-
-        const sampleCubicBezier = (x0, y0, x1, y1, x2, y2, x3, y3, n) => {
-            for (let i = 1; i <= n; i++) {
-                const t = i / n;
-                const mt = 1 - t;
-                const mt2 = mt * mt;
-                const mt3 = mt2 * mt;
-                const t2 = t * t;
-                const t3 = t2 * t;
-                const px = mt3 * x0 + 3 * mt2 * t * x1 + 3 * mt * t2 * x2 + t3 * x3;
-                const py = mt3 * y0 + 3 * mt2 * t * y1 + 3 * mt * t2 * y2 + t3 * y3;
-                pushPoint(px, py);
-            }
-        };
-
-        const sampleQuadraticBezier = (x0, y0, x1, y1, x2, y2, n) => {
-            for (let i = 1; i <= n; i++) {
-                const t = i / n;
-                const mt = 1 - t;
-                const px = mt * mt * x0 + 2 * mt * t * x1 + t * t * x2;
-                const py = mt * mt * y0 + 2 * mt * t * y1 + t * t * y2;
-                pushPoint(px, py);
-            }
         };
 
         const processCommand = (type, args) => {
@@ -2518,7 +2678,18 @@ class DrawingApp {
                         const cp1x = args[i], cp1y = args[i + 1];
                         const cp2x = args[i + 2], cp2y = args[i + 3];
                         const ex = args[i + 4], ey = args[i + 5];
-                        sampleCubicBezier(currentX, currentY, cp1x, cp1y, cp2x, cp2y, ex, ey, curveSamples);
+                        if (points.length > 0) {
+                            const prev = points[points.length - 1];
+                            prev.cp2x = (cp1x - vbX) * scaleX;
+                            prev.cp2y = (cp1y - vbY) * scaleY;
+                            if (prev.type === undefined) prev.type = 'smooth';
+                        }
+                        points.push({
+                            x: (ex - vbX) * scaleX, y: (ey - vbY) * scaleY,
+                            cp1x: (cp2x - vbX) * scaleX, cp1y: (cp2y - vbY) * scaleY,
+                            type: 'smooth'
+                        });
+                        currentX = ex; currentY = ey;
                         prevCpx2 = cp2x; prevCpy2 = cp2y;
                         prevQcpx = cp1x; prevQcpy = cp1y;
                         i += 6;
@@ -2532,7 +2703,18 @@ class DrawingApp {
                         const cp1x = currentX + args[i], cp1y = currentY + args[i + 1];
                         const cp2x = currentX + args[i + 2], cp2y = currentY + args[i + 3];
                         const ex = currentX + args[i + 4], ey = currentY + args[i + 5];
-                        sampleCubicBezier(currentX, currentY, cp1x, cp1y, cp2x, cp2y, ex, ey, curveSamples);
+                        if (points.length > 0) {
+                            const prev = points[points.length - 1];
+                            prev.cp2x = (cp1x - vbX) * scaleX;
+                            prev.cp2y = (cp1y - vbY) * scaleY;
+                            if (prev.type === undefined) prev.type = 'smooth';
+                        }
+                        points.push({
+                            x: (ex - vbX) * scaleX, y: (ey - vbY) * scaleY,
+                            cp1x: (cp2x - vbX) * scaleX, cp1y: (cp2y - vbY) * scaleY,
+                            type: 'smooth'
+                        });
+                        currentX = ex; currentY = ey;
                         prevCpx2 = cp2x; prevCpy2 = cp2y;
                         prevQcpx = cp1x; prevQcpy = cp1y;
                         i += 6;
@@ -2550,7 +2732,18 @@ class DrawingApp {
                         }
                         const cp2x = args[i], cp2y = args[i + 1];
                         const ex = args[i + 2], ey = args[i + 3];
-                        sampleCubicBezier(currentX, currentY, rx, ry, cp2x, cp2y, ex, ey, curveSamples);
+                        if (points.length > 0) {
+                            const prev = points[points.length - 1];
+                            prev.cp2x = (rx - vbX) * scaleX;
+                            prev.cp2y = (ry - vbY) * scaleY;
+                            if (prev.type === undefined) prev.type = 'smooth';
+                        }
+                        points.push({
+                            x: (ex - vbX) * scaleX, y: (ey - vbY) * scaleY,
+                            cp1x: (cp2x - vbX) * scaleX, cp1y: (cp2y - vbY) * scaleY,
+                            type: 'smooth'
+                        });
+                        currentX = ex; currentY = ey;
                         prevCpx2 = cp2x; prevCpy2 = cp2y;
                         prevQcpx = rx; prevQcpy = ry;
                         i += 4;
@@ -2568,7 +2761,18 @@ class DrawingApp {
                         }
                         const cp2x = currentX + args[i], cp2y = currentY + args[i + 1];
                         const ex = currentX + args[i + 2], ey = currentY + args[i + 3];
-                        sampleCubicBezier(currentX, currentY, rx, ry, cp2x, cp2y, ex, ey, curveSamples);
+                        if (points.length > 0) {
+                            const prev = points[points.length - 1];
+                            prev.cp2x = (rx - vbX) * scaleX;
+                            prev.cp2y = (ry - vbY) * scaleY;
+                            if (prev.type === undefined) prev.type = 'smooth';
+                        }
+                        points.push({
+                            x: (ex - vbX) * scaleX, y: (ey - vbY) * scaleY,
+                            cp1x: (cp2x - vbX) * scaleX, cp1y: (cp2y - vbY) * scaleY,
+                            type: 'smooth'
+                        });
+                        currentX = ex; currentY = ey;
                         prevCpx2 = cp2x; prevCpy2 = cp2y;
                         prevQcpx = rx; prevQcpy = ry;
                         i += 4;
@@ -2579,10 +2783,25 @@ class DrawingApp {
                 case 'Q': {
                     let i = 0;
                     while (i + 4 <= args.length) {
-                        const cpx = args[i], cpy = args[i + 1];
+                        const qcpx = args[i], qcpy = args[i + 1];
                         const ex = args[i + 2], ey = args[i + 3];
-                        sampleQuadraticBezier(currentX, currentY, cpx, cpy, ex, ey, curveSamples);
-                        prevQcpx = cpx; prevQcpy = cpy;
+                        const ccp1x = currentX + 2/3 * (qcpx - currentX);
+                        const ccp1y = currentY + 2/3 * (qcpy - currentY);
+                        const ccp2x = ex + 2/3 * (qcpx - ex);
+                        const ccp2y = ey + 2/3 * (qcpy - ey);
+                        if (points.length > 0) {
+                            const prev = points[points.length - 1];
+                            prev.cp2x = (ccp1x - vbX) * scaleX;
+                            prev.cp2y = (ccp1y - vbY) * scaleY;
+                            if (prev.type === undefined) prev.type = 'smooth';
+                        }
+                        points.push({
+                            x: (ex - vbX) * scaleX, y: (ey - vbY) * scaleY,
+                            cp1x: (ccp2x - vbX) * scaleX, cp1y: (ccp2y - vbY) * scaleY,
+                            type: 'smooth'
+                        });
+                        currentX = ex; currentY = ey;
+                        prevQcpx = qcpx; prevQcpy = qcpy;
                         i += 4;
                     }
                     prevCmd = 'Q';
@@ -2591,10 +2810,25 @@ class DrawingApp {
                 case 'q': {
                     let i = 0;
                     while (i + 4 <= args.length) {
-                        const cpx = currentX + args[i], cpy = currentY + args[i + 1];
+                        const qcpx = currentX + args[i], qcpy = currentY + args[i + 1];
                         const ex = currentX + args[i + 2], ey = currentY + args[i + 3];
-                        sampleQuadraticBezier(currentX, currentY, cpx, cpy, ex, ey, curveSamples);
-                        prevQcpx = cpx; prevQcpy = cpy;
+                        const ccp1x = currentX + 2/3 * (qcpx - currentX);
+                        const ccp1y = currentY + 2/3 * (qcpy - currentY);
+                        const ccp2x = ex + 2/3 * (qcpx - ex);
+                        const ccp2y = ey + 2/3 * (qcpy - ey);
+                        if (points.length > 0) {
+                            const prev = points[points.length - 1];
+                            prev.cp2x = (ccp1x - vbX) * scaleX;
+                            prev.cp2y = (ccp1y - vbY) * scaleY;
+                            if (prev.type === undefined) prev.type = 'smooth';
+                        }
+                        points.push({
+                            x: (ex - vbX) * scaleX, y: (ey - vbY) * scaleY,
+                            cp1x: (ccp2x - vbX) * scaleX, cp1y: (ccp2y - vbY) * scaleY,
+                            type: 'smooth'
+                        });
+                        currentX = ex; currentY = ey;
+                        prevQcpx = qcpx; prevQcpy = qcpy;
                         i += 4;
                     }
                     prevCmd = 'Q';
@@ -2609,7 +2843,22 @@ class DrawingApp {
                             ry = 2 * currentY - prevQcpy;
                         }
                         const ex = args[i], ey = args[i + 1];
-                        sampleQuadraticBezier(currentX, currentY, rx, ry, ex, ey, curveSamples);
+                        const ccp1x = currentX + 2/3 * (rx - currentX);
+                        const ccp1y = currentY + 2/3 * (ry - currentY);
+                        const ccp2x = ex + 2/3 * (rx - ex);
+                        const ccp2y = ey + 2/3 * (ry - ey);
+                        if (points.length > 0) {
+                            const prev = points[points.length - 1];
+                            prev.cp2x = (ccp1x - vbX) * scaleX;
+                            prev.cp2y = (ccp1y - vbY) * scaleY;
+                            if (prev.type === undefined) prev.type = 'smooth';
+                        }
+                        points.push({
+                            x: (ex - vbX) * scaleX, y: (ey - vbY) * scaleY,
+                            cp1x: (ccp2x - vbX) * scaleX, cp1y: (ccp2y - vbY) * scaleY,
+                            type: 'smooth'
+                        });
+                        currentX = ex; currentY = ey;
                         prevQcpx = rx; prevQcpy = ry;
                         i += 2;
                     }
@@ -2625,7 +2874,22 @@ class DrawingApp {
                             ry = 2 * currentY - prevQcpy;
                         }
                         const ex = currentX + args[i], ey = currentY + args[i + 1];
-                        sampleQuadraticBezier(currentX, currentY, rx, ry, ex, ey, curveSamples);
+                        const ccp1x = currentX + 2/3 * (rx - currentX);
+                        const ccp1y = currentY + 2/3 * (ry - currentY);
+                        const ccp2x = ex + 2/3 * (rx - ex);
+                        const ccp2y = ey + 2/3 * (ry - ey);
+                        if (points.length > 0) {
+                            const prev = points[points.length - 1];
+                            prev.cp2x = (ccp1x - vbX) * scaleX;
+                            prev.cp2y = (ccp1y - vbY) * scaleY;
+                            if (prev.type === undefined) prev.type = 'smooth';
+                        }
+                        points.push({
+                            x: (ex - vbX) * scaleX, y: (ey - vbY) * scaleY,
+                            cp1x: (ccp2x - vbX) * scaleX, cp1y: (ccp2y - vbY) * scaleY,
+                            type: 'smooth'
+                        });
+                        currentX = ex; currentY = ey;
                         prevQcpx = rx; prevQcpy = ry;
                         i += 2;
                     }
@@ -2646,7 +2910,7 @@ class DrawingApp {
                         } else {
                             ex = currentX + args[i + 5]; ey = currentY + args[i + 6];
                         }
-                        const arcPoints = this.sampleArc(currentX, currentY, rx, ry, rotation, largeArc, sweep, ex, ey, curveSamples);
+                        const arcPoints = this.sampleArc(currentX, currentY, rx, ry, rotation, largeArc, sweep, ex, ey, 20);
                         for (const p of arcPoints) pushPoint(p.x, p.y);
                         i += 7;
                     }
@@ -2817,7 +3081,11 @@ class DrawingApp {
         layer.vectorCommands.forEach((cmd, i) => {
             if (this.selectedIndices.includes(i)) {
                 if (cmd.type === 'brush' || cmd.type === 'fill') {
-                    for (const p of cmd.points) p.x += offset;
+                    for (const p of cmd.points) {
+                        p.x += offset;
+                        if (p.cp1x !== undefined) p.cp1x += offset;
+                        if (p.cp2x !== undefined) p.cp2x += offset;
+                    }
                 } else {
                     cmd.x1 += offset; cmd.x2 += offset;
                 }
@@ -2838,7 +3106,11 @@ class DrawingApp {
         layer.vectorCommands.forEach((cmd, i) => {
             if (this.selectedIndices.includes(i)) {
                 if (cmd.type === 'brush' || cmd.type === 'fill') {
-                    for (const p of cmd.points) p.y += offset;
+                    for (const p of cmd.points) {
+                        p.y += offset;
+                        if (p.cp1y !== undefined) p.cp1y += offset;
+                        if (p.cp2y !== undefined) p.cp2y += offset;
+                    }
                 } else {
                     cmd.y1 += offset; cmd.y2 += offset;
                 }
@@ -2860,8 +3132,7 @@ class DrawingApp {
         if (e.key === 'Escape') {
             if (this.pathEditMode) {
                 e.preventDefault();
-                this.showPathEditControls(false);
-                this.viewportRender();
+                this.togglePathEdit();
             }
             return;
         }
@@ -2944,6 +3215,12 @@ class DrawingApp {
         }
 
         switch (e.key.toLowerCase()) {
+            case 'e':
+                if (this.selectedIndices.length > 0) {
+                    e.preventDefault();
+                    this.togglePathEdit();
+                }
+                break;
             case 'b':
             case 'l':
             case 'r':
@@ -2991,10 +3268,18 @@ class DrawingApp {
             document.getElementById('toolFill').style.display = 'none';
             const expandGroup = document.getElementById('expandToolGroup');
             if (expandGroup) expandGroup.style.display = 'none';
+            this.updatePointTypeSelect();
         } else {
             this.editingPathCmd = null;
             this.editingPathIndex = -1;
             this.selectedPointIndex = -1;
+            this.addPointMode = false;
+            this.isDraggingPoint = false;
+            this.draggedHandle = null;
+            this.lastPathPoint = null;
+            this.hoveredPointIndex = -1;
+            this.hoveredSegmentIndex = -1;
+            this.hoveredHandle = null;
             this.updateDeleteButton();
             const layerBtns = ['addLayerBtn', 'deleteLayerBtn', 'moveUpLayerBtn', 'moveDownLayerBtn', 'mergeDownBtn', 'renameLayerBtn', 'clearLayerBtn'];
             layerBtns.forEach(id => {
@@ -3033,6 +3318,19 @@ class DrawingApp {
         }
 
         this.viewportRender();
+        this.updatePointTypeSelect();
+    }
+
+    updatePointTypeSelect() {
+        const select = document.getElementById('pointTypeSelect');
+        if (!select) return;
+        if (this.pathEditMode && this.selectedPointIndex >= 0 && this.editingPathCmd) {
+            const point = this.editingPathCmd.points[this.selectedPointIndex];
+            select.style.display = 'inline-block';
+            select.value = point.type || 'corner';
+        } else {
+            select.style.display = 'none';
+        }
     }
 
     exitPathEditMode() {
@@ -3041,9 +3339,16 @@ class DrawingApp {
         this.editingPathIndex = -1;
         this.selectedPointIndex = -1;
         this.addPointMode = false;
+        this.isDraggingPoint = false;
+        this.draggedHandle = null;
+        this.lastPathPoint = null;
+        this.hoveredPointIndex = -1;
+        this.hoveredSegmentIndex = -1;
+        this.hoveredHandle = null;
         document.getElementById('pathEditBtn').classList.remove('active');
         document.getElementById('addPointBtn').classList.remove('active');
         this.updateDeleteButton();
+        this.updatePointTypeSelect();
     }
 
     showPathEditControls(show) {
@@ -3057,34 +3362,77 @@ class DrawingApp {
         if (!this.pathEditMode || !this.editingPathCmd) return;
 
         const points = this.editingPathCmd.points;
-        const pointRadius = 5;
+        const z = Math.max(this.zoom, 1);
+        const baseScale = this.canvasCSSWidth / this.canvasWidth;
+        const t = Math.min(1, (z - 1) / 49);
+        const pointRadius = (7.5 + 7.5 * t) / (baseScale * z);
+        const handleRadius = (7.5 + 7.5 * t) / (baseScale * z);
+        const hoveredPointRadius = (9 + 9 * t) / (baseScale * z);
+        const pathLineWidth = (2.5 + 2.5 * t) / (baseScale * z);
+        const pointLineWidth = (2.5 + 2.5 * t) / (baseScale * z);
+        const dashLen = (4 + 4 * t) / (baseScale * z);
 
         for (let i = 0; i < points.length; i++) {
             const p = points[i];
+
+            if (i < points.length - 1) {
+                const next = points[i + 1];
+                ctx.strokeStyle = '#4a9eff';
+                ctx.lineWidth = pathLineWidth;
+                ctx.setLineDash([dashLen, dashLen]);
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y);
+                if (p.cp2x !== undefined && next.cp1x !== undefined) {
+                    ctx.lineTo(p.cp2x, p.cp2y);
+                    ctx.moveTo(next.cp1x, next.cp1y);
+                }
+                ctx.lineTo(next.x, next.y);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            if (p.cp1x !== undefined) {
+                const isHovered = this.hoveredHandle && this.hoveredHandle.pointIndex === i && this.hoveredHandle.type === 'cp1';
+                ctx.strokeStyle = 'rgba(200,80,80,0.6)';
+                ctx.lineWidth = pathLineWidth;
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y);
+                ctx.lineTo(p.cp1x, p.cp1y);
+                ctx.stroke();
+
+                ctx.fillStyle = 'rgba(200,80,80,0.8)';
+                ctx.beginPath();
+                ctx.arc(p.cp1x, p.cp1y, isHovered ? hoveredPointRadius : handleRadius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            if (p.cp2x !== undefined) {
+                const isHovered = this.hoveredHandle && this.hoveredHandle.pointIndex === i && this.hoveredHandle.type === 'cp2';
+                ctx.strokeStyle = 'rgba(80,200,80,0.6)';
+                ctx.lineWidth = pathLineWidth;
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y);
+                ctx.lineTo(p.cp2x, p.cp2y);
+                ctx.stroke();
+
+                ctx.fillStyle = 'rgba(80,200,80,0.8)';
+                ctx.beginPath();
+                ctx.arc(p.cp2x, p.cp2y, isHovered ? hoveredPointRadius : handleRadius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
             const isSelected = i === this.selectedPointIndex;
             const isHovered = i === this.hoveredPointIndex;
-            const radius = isSelected || isHovered ? pointRadius + 2 : pointRadius;
+            const radius = isSelected || isHovered ? hoveredPointRadius : pointRadius;
 
             ctx.fillStyle = isSelected ? '#ff6b35' : '#ffffff';
             ctx.strokeStyle = isSelected ? '#ff6b35' : '#4a9eff';
-            ctx.lineWidth = 2;
+            ctx.lineWidth = pointLineWidth;
 
             ctx.beginPath();
             ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
             ctx.fill();
             ctx.stroke();
-
-            if (i < points.length - 1) {
-                const next = points[i + 1];
-                ctx.strokeStyle = '#4a9eff';
-                ctx.lineWidth = 1;
-                ctx.setLineDash([2, 2]);
-                ctx.beginPath();
-                ctx.moveTo(p.x, p.y);
-                ctx.lineTo(next.x, next.y);
-                ctx.stroke();
-                ctx.setLineDash([]);
-            }
         }
 
         if (this.addPointMode && this.hoveredSegmentIndex >= 0) {
@@ -3097,15 +3445,15 @@ class DrawingApp {
 
                 ctx.fillStyle = '#4a9eff';
                 ctx.strokeStyle = '#ffffff';
-                ctx.lineWidth = 2;
+                ctx.lineWidth = pointLineWidth;
 
                 ctx.beginPath();
-                ctx.arc(mx, my, 7, 0, Math.PI * 2);
+                ctx.arc(mx, my, (7 + 7 * t) / (baseScale * z), 0, Math.PI * 2);
                 ctx.fill();
                 ctx.stroke();
 
                 ctx.fillStyle = '#ffffff';
-                ctx.font = 'bold 10px sans-serif';
+                ctx.font = `bold ${(10 + 10 * t) / (baseScale * z)}px sans-serif`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillText('+', mx, my);
@@ -3113,11 +3461,31 @@ class DrawingApp {
         }
     }
 
+    hitTestControlHandle(mx, my) {
+        if (!this.editingPathCmd) return null;
+        const points = this.editingPathCmd.points;
+        const z = Math.max(this.zoom, 1);
+        const bs = this.canvasCSSWidth / this.canvasWidth;
+        const hitRadius = (7.5 + 7.5 * Math.min(1, (z - 1) / 49)) / (bs * z);
+        for (let i = 0; i < points.length; i++) {
+            const p = points[i];
+            if (p.cp1x !== undefined && this.dist(mx, my, p.cp1x, p.cp1y) < hitRadius) {
+                return { pointIndex: i, type: 'cp1' };
+            }
+            if (p.cp2x !== undefined && this.dist(mx, my, p.cp2x, p.cp2y) < hitRadius) {
+                return { pointIndex: i, type: 'cp2' };
+            }
+        }
+        return null;
+    }
+
     hitTestPathPoint(mx, my) {
         if (!this.editingPathCmd) return -1;
 
         const points = this.editingPathCmd.points;
-        const hitRadius = 8;
+        const z = Math.max(this.zoom, 1);
+        const bs = this.canvasCSSWidth / this.canvasWidth;
+        const hitRadius = (7.5 + 7.5 * Math.min(1, (z - 1) / 49)) / (bs * z);
 
         for (let i = 0; i < points.length; i++) {
             const p = points[i];
@@ -3131,7 +3499,9 @@ class DrawingApp {
         if (!this.editingPathCmd || !this.addPointMode) return -1;
 
         const points = this.editingPathCmd.points;
-        const hitRadius = 6;
+        const z = Math.max(this.zoom, 1);
+        const bs = this.canvasCSSWidth / this.canvasWidth;
+        const hitRadius = (7.5 + 7.5 * Math.min(1, (z - 1) / 49)) / (bs * z);
 
         for (let i = 0; i < points.length - 1; i++) {
             const p1 = points[i];
@@ -3150,6 +3520,38 @@ class DrawingApp {
         this.editingPathCmd.points.splice(idx + 1, 0, { x: mx, y: my });
         this.selectedPointIndex = idx + 1;
         this.viewportRender();
+        this.updatePointTypeSelect();
+    }
+
+    moveControlHandle(dx, dy) {
+        if (!this.draggedHandle || !this.editingPathCmd) return;
+        const handle = this.draggedHandle;
+        const point = this.editingPathCmd.points[handle.pointIndex];
+        const type = point.type;
+        if (handle.type === 'cp1') {
+            point.cp1x += dx;
+            point.cp1y += dy;
+            if (type === 'symmetric') {
+                const dxA = point.x - point.cp1x;
+                const dyA = point.y - point.cp1y;
+                const angle = Math.atan2(dyA, dxA);
+                const dist = Math.hypot(dxA, dyA);
+                point.cp2x = point.x + dist * Math.cos(angle);
+                point.cp2y = point.y + dist * Math.sin(angle);
+            }
+        } else {
+            point.cp2x += dx;
+            point.cp2y += dy;
+            if (type === 'symmetric') {
+                const dxA = point.x - point.cp2x;
+                const dyA = point.y - point.cp2y;
+                const angle = Math.atan2(dyA, dxA);
+                const dist = Math.hypot(dxA, dyA);
+                point.cp1x = point.x + dist * Math.cos(angle);
+                point.cp1y = point.y + dist * Math.sin(angle);
+            }
+        }
+        this.viewportRender();
     }
 
     moveSelectedPoint(dx, dy) {
@@ -3158,11 +3560,24 @@ class DrawingApp {
         const point = this.editingPathCmd.points[this.selectedPointIndex];
         point.x += dx;
         point.y += dy;
+        if (point.cp1x !== undefined) { point.cp1x += dx; point.cp1y += dy; }
+        if (point.cp2x !== undefined) { point.cp2x += dx; point.cp2y += dy; }
         this.viewportRender();
     }
 
     handlePathEditMouseDown(e, coords) {
         if (!this.pathEditMode) return false;
+
+        const handleHit = this.hitTestControlHandle(coords.x, coords.y);
+        if (handleHit) {
+            this.saveState();
+            this.selectedPointIndex = handleHit.pointIndex;
+            this.draggedHandle = handleHit;
+            this.isDraggingPoint = true;
+            this.viewportRender();
+            this.updatePointTypeSelect();
+            return true;
+        }
 
         const pointIdx = this.hitTestPathPoint(coords.x, coords.y);
 
@@ -3177,6 +3592,7 @@ class DrawingApp {
                 }
                 this.selectedPointIndex = Math.min(pointIdx, this.editingPathCmd.points.length - 1);
                 this.viewportRender();
+                this.updatePointTypeSelect();
                 return true;
             }
 
@@ -3184,6 +3600,7 @@ class DrawingApp {
             this.selectedPointIndex = pointIdx;
             this.isDraggingPoint = true;
             this.viewportRender();
+            this.updatePointTypeSelect();
             return true;
         }
 
@@ -3197,32 +3614,43 @@ class DrawingApp {
 
         this.selectedPointIndex = -1;
         this.viewportRender();
+        this.updatePointTypeSelect();
         return true;
     }
 
     handlePathEditMouseMove(e, coords) {
         if (!this.pathEditMode) return false;
 
-        if (this.isDraggingPoint && this.selectedPointIndex >= 0 && this.editingPathCmd) {
+        if (this.isDraggingPoint && this.editingPathCmd) {
             if (!this.lastPathPoint) {
                 this.lastPathPoint = { x: coords.x, y: coords.y };
             }
 
             const dx = coords.x - this.lastPathPoint.x;
             const dy = coords.y - this.lastPathPoint.y;
-            this.moveSelectedPoint(dx, dy);
+
+            if (this.draggedHandle) {
+                this.moveControlHandle(dx, dy);
+            } else {
+                this.moveSelectedPoint(dx, dy);
+            }
+
             this.lastPathPoint = { x: coords.x, y: coords.y };
             this.viewportRender();
             return true;
         }
 
+        const handleHit = this.hitTestControlHandle(coords.x, coords.y);
         const pointIdx = this.hitTestPathPoint(coords.x, coords.y);
         const segIdx = this.hitTestPathSegment(coords.x, coords.y);
+        const handleChanged = (handleHit ? `${handleHit.pointIndex}:${handleHit.type}` : null) !==
+            (this.hoveredHandle ? `${this.hoveredHandle.pointIndex}:${this.hoveredHandle.type}` : null);
 
-        if (pointIdx !== this.hoveredPointIndex || segIdx !== this.hoveredSegmentIndex) {
+        if (handleChanged || pointIdx !== this.hoveredPointIndex || segIdx !== this.hoveredSegmentIndex) {
+            this.hoveredHandle = handleHit;
             this.hoveredPointIndex = pointIdx;
             this.hoveredSegmentIndex = segIdx;
-            this.viewportCanvas.style.cursor = pointIdx >= 0 ? 'move' : (this.addPointMode && segIdx >= 0 ? 'copy' : 'pointer');
+            this.viewportCanvas.style.cursor = handleHit ? 'move' : (pointIdx >= 0 ? 'move' : (this.addPointMode && segIdx >= 0 ? 'copy' : 'pointer'));
             this.viewportRender();
         }
 
@@ -3232,6 +3660,7 @@ class DrawingApp {
     handlePathEditMouseUp(e) {
         this.isDraggingPoint = false;
         this.lastPathPoint = null;
+        this.draggedHandle = null;
     }
 }
 
