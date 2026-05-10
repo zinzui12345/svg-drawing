@@ -50,6 +50,7 @@ class DrawingApp {
         this.isRotating = false;
         this.rotationCenter = null;
         this.rotationStartAngle = 0;
+        this.resizeStartBBox = null;
 
         this.pathEditMode = false;
         this.editingPathCmd = null;
@@ -61,6 +62,8 @@ class DrawingApp {
         this.hoveredSegmentIndex = -1;
         this.hoveredHandle = null;
         this.draggedHandle = null;
+
+        this.imageCache = {};
 
         this.init();
     }
@@ -240,6 +243,8 @@ class DrawingApp {
         document.getElementById('redoBtn').addEventListener('click', () => this.redo());
         document.getElementById('openBtn').addEventListener('click', () => document.getElementById('svgFileInput').click());
         document.getElementById('svgFileInput').addEventListener('change', (e) => this.openSVG(e));
+        document.getElementById('importImageBtn').addEventListener('click', () => document.getElementById('imageFileInput').click());
+        document.getElementById('imageFileInput').addEventListener('change', (e) => this.openImage(e));
         document.getElementById('clearLayerBtn').addEventListener('click', () => this.clearActiveLayer());
         document.getElementById('exportSVGBtn').addEventListener('click', () => this.exportSVG());
         document.getElementById('exportPNGBtn').addEventListener('click', () => this.exportImage());
@@ -703,6 +708,10 @@ class DrawingApp {
             this.selectMode = 'resize';
             this.selectStart = coords;
             this.resizeHandle = resizeHandle;
+            this.resizeStartBBox = {
+                x: this.selectionBBox.x, y: this.selectionBBox.y,
+                w: this.selectionBBox.w, h: this.selectionBBox.h
+            };
             this.isDrawing = false;
             return;
         }
@@ -771,8 +780,9 @@ class DrawingApp {
 
         const activeLayer = this.layers[this.activeLayerIndex];
         const allFill = this.selectedIndices.every(idx => activeLayer.vectorCommands[idx].type === 'fill');
+        const allImage = this.selectedIndices.every(idx => activeLayer.vectorCommands[idx].type === 'image');
 
-        if (allFill) {
+        if (allFill || allImage) {
             document.getElementById('sizeToolGroup').style.display = 'none';
         } else {
             document.getElementById('sizeToolGroup').style.display = 'flex';
@@ -852,7 +862,7 @@ class DrawingApp {
         } else if (this.selectMode === 'marquee') {
             this.viewportRender();
         } else if (this.selectMode === 'resize') {
-            this.resizeSelected(coords);
+            this.resizeSelected(coords, e.ctrlKey);
             this.updateSelectionBBox();
             this.viewportRender();
         }
@@ -1023,6 +1033,7 @@ class DrawingApp {
     handleMouseLeave(e) {
         this.isPanning = false;
         this.isZooming = false;
+        this.resizeStartBBox = null;
         this.mouseOnCanvas = false;
         if (this.pathEditMode) {
             this.isDraggingPoint = false;
@@ -1072,8 +1083,9 @@ class DrawingApp {
                 this.redoStack = [];
             }
             this.isSelecting = false;
-            this.selectMode = null;
-            this.resizeHandle = null;
+        this.selectMode = null;
+        this.resizeHandle = null;
+        this.resizeStartBBox = null;
             this.isRotating = false;
             this.rotationCenter = null;
         }
@@ -1339,6 +1351,13 @@ class DrawingApp {
             const rx = Math.abs(cmd.x2 - cmd.x1) / 2 + margin;
             const ry = Math.abs(cmd.y2 - cmd.y1) / 2 + margin;
             return { minX: cx - rx, minY: cy - ry, maxX: cx + rx, maxY: cy + ry };
+        } else if (cmd.type === 'image') {
+            return {
+                minX: cmd.x,
+                minY: cmd.y,
+                maxX: cmd.x + cmd.width,
+                maxY: cmd.y + cmd.height
+            };
         }
         return null;
     }
@@ -1369,7 +1388,10 @@ class DrawingApp {
             const rx = Math.abs(cmd.x2 - cmd.x1) / 2;
             const ry = Math.abs(cmd.y2 - cmd.y1) / 2;
             const dist = Math.sqrt(((mx - cx) / rx) ** 2 + ((my - cy) / ry) ** 2);
+            if (dist < 1) return false;
             return Math.abs(dist - 1) < hitRadius / Math.max(rx, ry);
+        } else if (cmd.type === 'image') {
+            return mx >= cmd.x && mx <= cmd.x + cmd.width && my >= cmd.y && my <= cmd.y + cmd.height;
         }
         return false;
     }
@@ -1406,6 +1428,9 @@ class DrawingApp {
                     if (p.cp1x !== undefined) { p.cp1x += dx; p.cp1y += dy; }
                     if (p.cp2x !== undefined) { p.cp2x += dx; p.cp2y += dy; }
                 }
+            } else if (cmd.type === 'image') {
+                cmd.x += dx;
+                cmd.y += dy;
             } else {
                 cmd.x1 += dx;
                 cmd.y1 += dy;
@@ -1441,6 +1466,17 @@ class DrawingApp {
                         p.cp2y = cy + cdx * sin + cdy * cos;
                     }
                 }
+            } else if (cmd.type === 'image') {
+                const dx = cmd.x - cx, dy = cmd.y - cy;
+                const dx2 = cmd.x + cmd.width - cx, dy2 = cmd.y + cmd.height - cy;
+                const nx = cx + dx * cos - dy * sin;
+                const ny = cy + dx * sin + dy * cos;
+                const nx2 = cx + dx2 * cos - dy2 * sin;
+                const ny2 = cy + dx2 * sin + dy2 * cos;
+                cmd.x = Math.min(nx, nx2);
+                cmd.y = Math.min(ny, ny2);
+                cmd.width = Math.abs(nx2 - nx);
+                cmd.height = Math.abs(ny2 - ny);
             } else {
                 const dx1 = cmd.x1 - cx, dy1 = cmd.y1 - cy;
                 cmd.x1 = cx + dx1 * cos - dy1 * sin;
@@ -1453,26 +1489,114 @@ class DrawingApp {
         this.viewportRender();
     }
 
-    resizeSelected(coords) {
+    resizeSelected(coords, ctrlKey) {
         const activeLayer = this.layers[this.activeLayerIndex];
         const bbox = this.selectionBBox;
         const handle = this.resizeHandle;
+        const start = this.resizeStartBBox;
 
-        let newBBox = { x: bbox.x, y: bbox.y, w: bbox.w, h: bbox.h, cx: bbox.cx, cy: bbox.cy };
+        let newBBox = { x: bbox.x, y: bbox.y, w: bbox.w, h: bbox.h };
 
-        switch (handle) {
-            case 'br': newBBox.w = coords.x - bbox.x; newBBox.h = coords.y - bbox.y; break;
-            case 'bl': newBBox.w = bbox.w + (bbox.x - coords.x); newBBox.x = coords.x; newBBox.h = coords.y - bbox.y; break;
-            case 'tr': newBBox.w = coords.x - bbox.x; newBBox.h = bbox.h + (bbox.y - coords.y); newBBox.y = coords.y; break;
-            case 'tl': newBBox.w = bbox.w + (bbox.x - coords.x); newBBox.h = bbox.h + (bbox.y - coords.y); newBBox.x = coords.x; newBBox.y = coords.y; break;
-            case 'tm': newBBox.h = bbox.h + (bbox.y - coords.y); newBBox.y = coords.y; break;
-            case 'bm': newBBox.h = coords.y - bbox.y; break;
-            case 'ml': newBBox.w = bbox.w + (bbox.x - coords.x); newBBox.x = coords.x; break;
-            case 'mr': newBBox.w = coords.x - bbox.x; break;
+        const isCorner = ['br', 'bl', 'tr', 'tl'].includes(handle);
+
+        if (isCorner && start) {
+            const aspect = start.w / start.h;
+            let anchorX, anchorY;
+            if (handle === 'br' || handle === 'tr') anchorX = start.x;
+            else anchorX = start.x + start.w;
+            if (handle === 'br' || handle === 'bl') anchorY = start.y;
+            else anchorY = start.y + start.h;
+
+            const dx = coords.x - anchorX;
+            const dy = coords.y - anchorY;
+            const absDx = Math.abs(dx);
+            const absDy = Math.abs(dy);
+            const s = absDx / start.w >= absDy / start.h
+                ? (absDx > 0.1 ? dx / start.w : 0.01)
+                : (absDy > 0.1 ? dy / start.h : 0.01);
+
+            const absScale = Math.max(Math.abs(s), 0.01);
+            newBBox.w = start.w * absScale;
+            newBBox.h = start.h * absScale;
+
+            if (handle === 'bl' || handle === 'tl') newBBox.x = anchorX - newBBox.w;
+            if (handle === 'tr' || handle === 'tl') newBBox.y = anchorY - newBBox.h;
+
+            const minW = Math.max(32, Math.round(32 * aspect));
+            const minH = Math.max(32, Math.round(32 / aspect));
+            const sMin = Math.max(minW / newBBox.w, minH / newBBox.h, 1);
+            if (sMin > 1) {
+                newBBox.w *= sMin;
+                newBBox.h *= sMin;
+                switch (handle) {
+                    case 'bl': case 'tl': newBBox.x = (start.x + start.w) - newBBox.w; break;
+                }
+                switch (handle) {
+                    case 'tr': case 'tl': newBBox.y = (start.y + start.h) - newBBox.h; break;
+                }
+            }
+        } else if (ctrlKey && start && ['ml', 'mr', 'tm', 'bm'].includes(handle)) {
+            const aspect = start.w / start.h;
+            if (handle === 'mr') {
+                newBBox.w = coords.x - bbox.x;
+                newBBox.h = newBBox.w / aspect;
+                newBBox.y = bbox.cy - newBBox.h / 2;
+            } else if (handle === 'ml') {
+                newBBox.w = (bbox.x + bbox.w) - coords.x;
+                newBBox.x = coords.x;
+                newBBox.h = newBBox.w / aspect;
+                newBBox.y = bbox.cy - newBBox.h / 2;
+            } else if (handle === 'bm') {
+                newBBox.h = coords.y - bbox.y;
+                newBBox.w = newBBox.h * aspect;
+                newBBox.x = bbox.cx - newBBox.w / 2;
+            } else if (handle === 'tm') {
+                newBBox.h = (bbox.y + bbox.h) - coords.y;
+                newBBox.y = coords.y;
+                newBBox.w = newBBox.h * aspect;
+                newBBox.x = bbox.cx - newBBox.w / 2;
+            }
+            const minW = Math.max(32, Math.round(32 * aspect));
+            const minH = Math.max(32, Math.round(32 / aspect));
+            const sMin = Math.max(minW / newBBox.w, minH / newBBox.h, 1);
+            if (sMin > 1) {
+                newBBox.w *= sMin;
+                newBBox.h *= sMin;
+                newBBox.x = bbox.cx - newBBox.w / 2;
+                newBBox.y = bbox.cy - newBBox.h / 2;
+            }
+        } else {
+            switch (handle) {
+                case 'br': newBBox.w = coords.x - bbox.x; newBBox.h = coords.y - bbox.y; break;
+                case 'bl': newBBox.w = bbox.w + (bbox.x - coords.x); newBBox.x = coords.x; newBBox.h = coords.y - bbox.y; break;
+                case 'tr': newBBox.w = coords.x - bbox.x; newBBox.h = bbox.h + (bbox.y - coords.y); newBBox.y = coords.y; break;
+                case 'tl': newBBox.w = bbox.w + (bbox.x - coords.x); newBBox.h = bbox.h + (bbox.y - coords.y); newBBox.x = coords.x; newBBox.y = coords.y; break;
+                case 'tm': newBBox.h = bbox.h + (bbox.y - coords.y); newBBox.y = coords.y; break;
+                case 'bm': newBBox.h = coords.y - bbox.y; break;
+                case 'ml': newBBox.w = bbox.w + (bbox.x - coords.x); newBBox.x = coords.x; break;
+                case 'mr': newBBox.w = coords.x - bbox.x; break;
+            }
         }
 
-        if (newBBox.w < 10) newBBox.w = 10;
-        if (newBBox.h < 10) newBBox.h = 10;
+        if (isCorner && start) {
+            const aspect = start.w / start.h;
+            const minW = Math.max(32, Math.round(32 * aspect));
+            const minH = Math.max(32, Math.round(32 / aspect));
+            const sMin = Math.max(minW / newBBox.w, minH / newBBox.h, 1);
+            if (sMin > 1) {
+                newBBox.w *= sMin;
+                newBBox.h *= sMin;
+                switch (handle) {
+                    case 'bl': case 'tl': newBBox.x = (start.x + start.w) - newBBox.w; break;
+                }
+                switch (handle) {
+                    case 'tr': case 'tl': newBBox.y = (start.y + start.h) - newBBox.h; break;
+                }
+            }
+        } else {
+            if (newBBox.w < 32) newBBox.w = 32;
+            if (newBBox.h < 32) newBBox.h = 32;
+        }
 
         const scaleX = newBBox.w / bbox.w;
         const scaleY = newBBox.h / bbox.h;
@@ -1492,6 +1616,11 @@ class DrawingApp {
                         p.cp2y = newBBox.y + (p.cp2y - bbox.y) * scaleY;
                     }
                 }
+            } else if (cmd.type === 'image') {
+                cmd.x = newBBox.x + (cmd.x - bbox.x) * scaleX;
+                cmd.y = newBBox.y + (cmd.y - bbox.y) * scaleY;
+                cmd.width = cmd.width * scaleX;
+                cmd.height = cmd.height * scaleY;
             } else {
                 cmd.x1 = newBBox.x + (cmd.x1 - bbox.x) * scaleX;
                 cmd.y1 = newBBox.y + (cmd.y1 - bbox.y) * scaleY;
@@ -1570,6 +1699,11 @@ class DrawingApp {
             ctx.beginPath();
             ctx.ellipse((cmd.x1 + cmd.x2) / 2, (cmd.y1 + cmd.y2) / 2, Math.abs(cmd.x2 - cmd.x1) / 2, Math.abs(cmd.y2 - cmd.y1) / 2, 0, 0, Math.PI * 2);
             ctx.stroke();
+        } else if (cmd.type === 'image') {
+            const img = this.imageCache[cmd.src];
+            if (img) {
+                ctx.drawImage(img, cmd.x, cmd.y, cmd.width, cmd.height);
+            }
         }
     }
 
@@ -1780,7 +1914,9 @@ class DrawingApp {
     }
 
     distToRect(px, py, rx, ry, rw, rh) {
-        if (px >= rx && px <= rx + rw && py >= ry && py <= ry + rh) return 0;
+        if (px >= rx && px <= rx + rw && py >= ry && py <= ry + rh) {
+            return Math.min(px - rx, rx + rw - px, py - ry, ry + rh - py);
+        }
         const cx = Math.max(rx, Math.min(px, rx + rw));
         const cy = Math.max(ry, Math.min(py, ry + rh));
         return this.dist(px, py, cx, cy);
@@ -2096,7 +2232,7 @@ class DrawingApp {
             if (!layer.visible) continue;
 
             const commands = layer.vectorCommands || [];
-            const hasVector = commands.some(cmd => ['brush', 'fill', 'line', 'rect', 'circle'].includes(cmd.type));
+            const hasVector = commands.some(cmd => ['brush', 'fill', 'line', 'rect', 'circle', 'image'].includes(cmd.type));
 
             const layerLabel = layer.name.replace(/"/g, '&quot;');
             const layerGroupAttrs = [
@@ -2154,6 +2290,11 @@ class DrawingApp {
                         const rx = Math.abs(cmd.x2 - cmd.x1) / 2;
                         const ry = Math.abs(cmd.y2 - cmd.y1) / 2;
                         svgParts.push(`    <ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" fill="none" opacity="${cmd.opacity}"/>`);
+                    } else if (cmd.type === 'image') {
+                        const img = this.imageCache[cmd.src];
+                        if (img) {
+                            svgParts.push(`    <image x="${cmd.x.toFixed(2)}" y="${cmd.y.toFixed(2)}" width="${cmd.width.toFixed(2)}" height="${cmd.height.toFixed(2)}" href="${cmd.src}" opacity="${cmd.opacity !== undefined ? cmd.opacity : 1}"/>`);
+                        }
                     }
                 }
             }
@@ -2182,6 +2323,45 @@ class DrawingApp {
             this.loadSVG(event.target.result);
         };
         reader.readAsText(file);
+        e.target.value = '';
+    }
+
+    openImage(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const src = event.target.result;
+            const img = new Image();
+            img.onload = () => {
+                this.imageCache[src] = img;
+                const maxDim = 500;
+                let w = img.naturalWidth;
+                let h = img.naturalHeight;
+                if (w > maxDim || h > maxDim) {
+                    const scale = Math.min(maxDim / w, maxDim / h);
+                    w *= scale;
+                    h *= scale;
+                }
+                this.saveState();
+                const activeLayer = this.layers[this.activeLayerIndex];
+                const cx = this.canvasWidth / 2 - w / 2;
+                const cy = this.canvasHeight / 2 - h / 2;
+                activeLayer.vectorCommands.push({
+                    type: 'image',
+                    src: src,
+                    x: cx,
+                    y: cy,
+                    width: w,
+                    height: h,
+                    opacity: 1
+                });
+                this.viewportRender();
+                this.updateLayerPanel();
+            };
+            img.src = src;
+        };
+        reader.readAsDataURL(file);
         e.target.value = '';
     }
 
@@ -2499,6 +2679,30 @@ class DrawingApp {
                         type: 'circle', color: '#000000', size: strokeWidth * (scaleX + scaleY) / 2, opacity,
                         x1: cx - rx, y1: cy - ry, x2: cx + rx, y2: cy + ry
                     });
+                }
+            } else if (tag === 'image') {
+                const imgX = parseFloat(el.getAttribute('x') || '0');
+                const imgY = parseFloat(el.getAttribute('y') || '0');
+                const imgW = parseFloat(el.getAttribute('width') || '0');
+                const imgH = parseFloat(el.getAttribute('height') || '0');
+                let src = el.getAttribute('href') || el.getAttributeNS('http://www.w3.org/1999/xlink', 'href') || '';
+                if (src) {
+                    const cmd = {
+                        type: 'image',
+                        src: src,
+                        x: (imgX - vbX) * scaleX,
+                        y: (imgY - vbY) * scaleY,
+                        width: imgW * scaleX,
+                        height: imgH * scaleY,
+                        opacity
+                    };
+                    commands.push(cmd);
+                    if (!this.imageCache[src]) {
+                        const img = new Image();
+                        img.onload = () => { this.viewportRender(); };
+                        img.src = src;
+                        this.imageCache[src] = img;
+                    }
                 }
             } else if (tag === 'line') {
                 const x1 = (parseFloat(el.getAttribute('x1') || '0') - vbX) * scaleX;
@@ -3086,6 +3290,8 @@ class DrawingApp {
                         if (p.cp1x !== undefined) p.cp1x += offset;
                         if (p.cp2x !== undefined) p.cp2x += offset;
                     }
+                } else if (cmd.type === 'image') {
+                    cmd.x += offset;
                 } else {
                     cmd.x1 += offset; cmd.x2 += offset;
                 }
@@ -3111,6 +3317,8 @@ class DrawingApp {
                         if (p.cp1y !== undefined) p.cp1y += offset;
                         if (p.cp2y !== undefined) p.cp2y += offset;
                     }
+                } else if (cmd.type === 'image') {
+                    cmd.y += offset;
                 } else {
                     cmd.y1 += offset; cmd.y2 += offset;
                 }

@@ -18,9 +18,11 @@ A lightweight, browser-based vector drawing application with layer support, SVG 
   - **Rotate** — Rotation handle above the selection bounding box.
   - **Center Horizontal** — Move selected objects to the horizontal center of the canvas.
   - **Center Vertical** — Move selected objects to the vertical center of the canvas.
+- **Image objects** — Imported images can be selected, moved, resized, and rotated like any other object.
 
 ### Path Editing
-- Enter path edit mode to modify individual points on brush strokes.
+- **Toggle Path Edit (E)** — Enter/exit path edit mode to modify individual points on brush strokes.
+- **Point Types** — Set point type to Corner, Smooth, or Symmetric via dropdown. Smooth handles move independently; Symmetric mirrors handles.
 - **Add Point** — Click on a path segment to insert a new point.
 - **Delete Point** — Remove selected points from the path.
 - Drawing tools are hidden and layer controls are disabled while editing paths to prevent accidental changes.
@@ -44,7 +46,8 @@ A lightweight, browser-based vector drawing application with layer support, SVG 
   - Implicit line commands in `d` attributes (Inkscape compatibility).
   - SVG elements outside the default canvas area (auto-scaling).
   - `mix-blend-mode` CSS property restoration on import.
-- **Export SVG** — Export the drawing as a clean SVG file with layer grouping, blend modes, and opacity preserved.
+- **Import Image** — Import raster images (PNG, JPEG, etc.) into the active layer as an image object. Supports selection and transformation.
+- **Export SVG** — Export the drawing as a clean SVG file with layer grouping, blend modes, opacity, and embedded images preserved.
 - **Export PNG** — Flatten all visible layers to a PNG image with an optional white background.
 
 ## Keyboard Shortcuts
@@ -57,10 +60,14 @@ A lightweight, browser-based vector drawing application with layer support, SVG 
 | **R**        | Rectangle tool            |
 | **C**        | Circle tool               |
 | **F**        | Fill tool                 |
+| **E**         | Toggle path edit mode     |
 | **Ctrl+Z**   | Undo                      |
 | **Ctrl+Y**   | Redo                      |
 | **Delete**   | Delete selected objects   |
 | **F2**       | Rename active layer       |
+| **Middle btn drag** | Pan canvas           |
+| **Ctrl+Middle btn drag** | Zoom in/out      |
+| **Ctrl+Scroll** | Zoom in/out             |
 
 ## File Structure
 
