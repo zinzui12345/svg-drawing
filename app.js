@@ -63,6 +63,8 @@ class DrawingApp {
         this.hoveredHandle = null;
         this.draggedHandle = null;
 
+        this.openedFileName = null;
+        this.openedFileHandle = null;
         this.imageCache = {};
 
         this.init();
@@ -241,8 +243,8 @@ class DrawingApp {
 
         document.getElementById('undoBtn').addEventListener('click', () => this.undo());
         document.getElementById('redoBtn').addEventListener('click', () => this.redo());
-        document.getElementById('openBtn').addEventListener('click', () => document.getElementById('svgFileInput').click());
-        document.getElementById('svgFileInput').addEventListener('change', (e) => this.openSVG(e));
+        document.getElementById('openBtn').addEventListener('click', () => this.openSVGFile());
+        document.getElementById('svgFileInput').addEventListener('change', (e) => this.openSVGFromInput(e));
         document.getElementById('importImageBtn').addEventListener('click', () => document.getElementById('imageFileInput').click());
         document.getElementById('imageFileInput').addEventListener('change', (e) => this.openImage(e));
         document.getElementById('clearLayerBtn').addEventListener('click', () => this.clearActiveLayer());
@@ -401,6 +403,18 @@ class DrawingApp {
         document.getElementById('centerVerticalBtn').addEventListener('click', () => this.centerSelectionVertical());
 
         document.addEventListener('keydown', (e) => this.handleKeyboard(e));
+
+        // Prevent Ctrl+W / Cmd+W from closing the tab
+        window.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && (e.key === 'w' || e.key === 'W')) {
+                e.preventDefault();
+            }
+        }, { capture: true });
+
+        window.addEventListener('beforeunload', (e) => {
+            e.preventDefault();
+            e.returnValue = '';
+        });
 
         window.addEventListener('resize', () => this.fitCanvasToContainer());
     }
@@ -960,7 +974,10 @@ class DrawingApp {
 
         if (this.currentTool === 'brush') {
             if (this.currentStroke) {
-                this.currentStroke.points.push({ x: coords.x, y: coords.y });
+                const last = this.currentStroke.points[this.currentStroke.points.length - 1];
+                if (!last || this.dist(coords.x, coords.y, last.x, last.y) >= 5) {
+                    this.currentStroke.points.push({ x: coords.x, y: coords.y });
+                }
             }
             this.lastX = coords.x;
             this.lastY = coords.y;
@@ -2229,7 +2246,6 @@ class DrawingApp {
 
         for (let li = this.layers.length - 1; li >= 0; li--) {
             const layer = this.layers[li];
-            if (!layer.visible) continue;
 
             const commands = layer.vectorCommands || [];
             const hasVector = commands.some(cmd => ['brush', 'fill', 'line', 'rect', 'circle', 'image'].includes(cmd.type));
@@ -2306,17 +2322,48 @@ class DrawingApp {
 
         const svgContent = svgParts.join('\n');
         const blob = new Blob([svgContent], { type: 'image/svg+xml' });
+
+        if (this.openedFileHandle) {
+            const fileName = this.openedFileName;
+            this.openedFileHandle.createWritable().then(writable => {
+                writable.write(blob).then(() => writable.close());
+            }).then(() => {
+                alert(`File ${fileName} berhasil disimpan.`);
+            });
+            return;
+        }
+
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
-        link.download = 'drawing.svg';
+        link.download = this.openedFileName || 'drawing.svg';
         link.href = url;
         link.click();
         URL.revokeObjectURL(url);
+        alert('File SVG berhasil disimpan.');
     }
 
-    openSVG(e) {
+    openSVGFile() {
+        if ('showOpenFilePicker' in window) {
+            window.showOpenFilePicker({ types: [{ accept: { 'image/svg+xml': ['.svg'] } }] })
+                .then(async ([handle]) => {
+                    this.openedFileHandle = handle;
+                    this.openedFileName = handle.name;
+                    const file = await handle.getFile();
+                    const text = await file.text();
+                    this.loadSVG(text);
+                })
+                .catch(() => {
+                    document.getElementById('svgFileInput').click();
+                });
+        } else {
+            document.getElementById('svgFileInput').click();
+        }
+    }
+
+    openSVGFromInput(e) {
         const file = e.target.files[0];
         if (!file || !file.name.endsWith('.svg')) return;
+        this.openedFileName = file.name;
 
         const reader = new FileReader();
         reader.onload = (event) => {
@@ -3337,6 +3384,27 @@ class DrawingApp {
             return;
         }
 
+        if (e.key === '[' || e.key === ']') {
+            e.preventDefault();
+            const step = e.key === ']' ? 1 : -1;
+            const slider = document.getElementById('brushSize');
+            const newSize = Math.max(1, Math.min(100, this.brushSize + step));
+            this.brushSize = newSize;
+            slider.value = newSize;
+            document.getElementById('brushSizeValue').value = newSize;
+            this.viewportRender();
+            if (this.selectedIndices && this.selectedIndices.length > 0) {
+                this.saveState();
+                const activeLayer = this.layers[this.activeLayerIndex];
+                for (const idx of this.selectedIndices) {
+                    const cmd = activeLayer.vectorCommands[idx];
+                    if (cmd) cmd.size = newSize;
+                }
+                this.viewportRender();
+            }
+            return;
+        }
+
         if (e.key === 'Escape') {
             if (this.pathEditMode) {
                 e.preventDefault();
@@ -3379,6 +3447,11 @@ class DrawingApp {
                     this.updateDeleteButton();
                     this.viewportRender();
                 }
+            } else if (e.key === 's' || e.key === 'S') {
+                e.preventDefault();
+                this.exportSVG();
+            } else if (e.key === 'w' || e.key === 'W') {
+                e.preventDefault();
             } else if (e.key === '0') {
                 e.preventDefault();
                 this.fitCanvasToContainer();
