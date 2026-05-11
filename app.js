@@ -1546,6 +1546,7 @@ class DrawingApp {
                 cmd.y2 += dy;
             }
         }
+        this.updateSelectionBBox();
         this.viewportRender();
     }
 
@@ -3682,6 +3683,21 @@ class DrawingApp {
             this.panY = relY - (relY - this.panY) * (newZoom / this.zoom);
             this.zoom = newZoom;
             this.applyTransform();
+            return;
+        }
+
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+            if (this.currentTool === 'select' && this.selectedIndices.length > 0) {
+                e.preventDefault();
+                const step = e.shiftKey ? 5 : 1;
+                let dx = 0, dy = 0;
+                if (e.key === 'ArrowUp') dy = -step;
+                else if (e.key === 'ArrowDown') dy = step;
+                else if (e.key === 'ArrowLeft') dx = -step;
+                else if (e.key === 'ArrowRight') dx = step;
+                this.saveState();
+                this.moveSelected(dx, dy);
+            }
             return;
         }
 
