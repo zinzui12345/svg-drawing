@@ -2090,7 +2090,6 @@ class DrawingApp {
             const isInterior = !isCorner[i];
             const point = { x: p.x, y: p.y };
             if (isInterior || isStart || isEnd) {
-                if (!isCorner[i]) point.type = 'smooth';
                 const prev = i > 0 ? simplified[i - 1] : { x: 2 * p.x - simplified[1].x, y: 2 * p.y - simplified[1].y };
                 const next = i < simplified.length - 1 ? simplified[i + 1] : { x: 2 * p.x - simplified[simplified.length - 2].x, y: 2 * p.y - simplified[simplified.length - 2].y };
                 if (isInterior || isEnd) {
@@ -2100,6 +2099,21 @@ class DrawingApp {
                 if (isInterior || isStart) {
                     point.cp2x = p.x + (next.x - prev.x) / 6;
                     point.cp2y = p.y + (next.y - prev.y) / 6;
+                }
+                if (!isCorner[i]) {
+                    if (point.cp1x !== undefined && point.cp2x !== undefined) {
+                        const dx1 = point.cp1x - p.x, dy1 = point.cp1y - p.y;
+                        const dx2 = point.cp2x - p.x, dy2 = point.cp2y - p.y;
+                        const len1 = Math.hypot(dx1, dy1);
+                        const len2 = Math.hypot(dx2, dy2);
+                        if (len1 > 0 && len2 > 0 && Math.abs(len1 - len2) < 0.01 && Math.abs(dx1 * dx2 + dy1 * dy2 + len1 * len2) < 0.01) {
+                            point.type = 'symmetric';
+                        } else {
+                            point.type = 'smooth';
+                        }
+                    } else {
+                        point.type = 'smooth';
+                    }
                 }
             }
             result.push(point);
@@ -3616,8 +3630,8 @@ class DrawingApp {
                 e.preventDefault();
                 this.redo();
             } else if (e.key === 'a' || e.key === 'A') {
+                e.preventDefault();
                 if (this.currentTool === 'select') {
-                    e.preventDefault();
                     const activeLayer = this.layers[this.activeLayerIndex];
                     this.selectedIndices = (activeLayer.vectorCommands || []).map((_, i) => i);
                     this.selectedCommands = [...activeLayer.vectorCommands];
@@ -3687,16 +3701,23 @@ class DrawingApp {
         }
 
         if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+            const step = e.shiftKey ? 5 : 1;
+            let dx = 0, dy = 0;
+            if (e.key === 'ArrowUp') dy = -step;
+            else if (e.key === 'ArrowDown') dy = step;
+            else if (e.key === 'ArrowLeft') dx = -step;
+            else if (e.key === 'ArrowRight') dx = step;
+            if (this.pathEditMode && this.selectedPointIndex >= 0 && this.editingPathCmd) {
+                e.preventDefault();
+                this.saveState();
+                this.moveSelectedPoint(dx, dy);
+                return;
+            }
             if (this.currentTool === 'select' && this.selectedIndices.length > 0) {
                 e.preventDefault();
-                const step = e.shiftKey ? 5 : 1;
-                let dx = 0, dy = 0;
-                if (e.key === 'ArrowUp') dy = -step;
-                else if (e.key === 'ArrowDown') dy = step;
-                else if (e.key === 'ArrowLeft') dx = -step;
-                else if (e.key === 'ArrowRight') dx = step;
                 this.saveState();
                 this.moveSelected(dx, dy);
+                return;
             }
             return;
         }
@@ -3780,9 +3801,10 @@ class DrawingApp {
             document.getElementById('toolFill').style.display = 'flex';
             const expandGroup = document.getElementById('expandToolGroup');
             if (expandGroup) expandGroup.style.display = this.currentTool === 'fill' ? 'flex' : 'none';
+            this.updateSelectionBBox();
         }
 
-        document.getElementById('pathEditControls').style.display = 'flex';
+        document.getElementById('pathEditControls').style.display = this.pathEditMode ? 'flex' : 'none';
         this.viewportRender();
     }
 
@@ -3836,6 +3858,8 @@ class DrawingApp {
         document.getElementById('addPointBtn').classList.remove('active');
         this.updateDeleteButton();
         this.updatePointTypeSelect();
+        this.updateSelectionBBox();
+        this.viewportRender();
     }
 
     showPathEditControls(show) {
