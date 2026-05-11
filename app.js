@@ -44,6 +44,8 @@ class DrawingApp {
         this.panStart = { x: 0, y: 0 };
         this.isZooming = false;
         this.zoomStartY = 0;
+        this.isRotatingViewport = false;
+        this.rotateStartAngle = 0;
         this.selectMode = null;
         this.selectStart = null;
         this.selectDragOffset = null;
@@ -74,6 +76,7 @@ class DrawingApp {
         this.zoom = 1;
         this.panX = 0;
         this.panY = 0;
+        this.viewportRotation = 0;
         this.fitCanvasToContainer();
         this.addLayer('Layer 1');
         this.setupEventListeners();
@@ -84,6 +87,7 @@ class DrawingApp {
         this.zoom = 1;
         this.panX = 0;
         this.panY = 0;
+        this.viewportRotation = 0;
         const containerRect = this.canvasContainer.getBoundingClientRect();
         const padding = 20;
         const availW = containerRect.width - padding * 2;
@@ -107,11 +111,16 @@ class DrawingApp {
         this.viewportCanvas.height = containerRect.height * dpr;
 
         this.updateZoomUI();
+        this.updateRotateUI();
         this.viewportRender();
     }
 
     applyTransform() {
+        const pi = Math.PI;
+        if (this.viewportRotation > pi) this.viewportRotation -= 2 * pi;
+        else if (this.viewportRotation < -pi) this.viewportRotation += 2 * pi;
         this.updateZoomUI();
+        this.updateRotateUI();
         this.viewportRender();
     }
 
@@ -121,6 +130,14 @@ class DrawingApp {
         const value = document.getElementById('zoomValue');
         if (slider) slider.value = pct;
         if (value) value.value = pct;
+    }
+
+    updateRotateUI() {
+        const deg = Math.round((this.viewportRotation || 0) * 180 / Math.PI);
+        const slider = document.getElementById('RotateSlider');
+        const value = document.getElementById('RotateValue');
+        if (slider) slider.value = deg;
+        if (value) value.value = deg;
     }
 
     handleWheel(e) {
@@ -279,6 +296,28 @@ class DrawingApp {
             document.getElementById('zoomSlider').dispatchEvent(new Event('input'));
         });
 
+        document.getElementById('resetRotationBtn').addEventListener('click', () => {
+            this.viewportRotation = 0;
+            this.updateRotateUI();
+            this.applyTransform();
+        });
+
+        document.getElementById('RotateSlider').addEventListener('input', (e) => {
+            const deg = parseFloat(e.target.value);
+            this.viewportRotation = deg * Math.PI / 180;
+            document.getElementById('RotateValue').value = deg;
+            this.applyTransform();
+        });
+
+        document.getElementById('RotateValue').addEventListener('change', (e) => {
+            const val = parseFloat(e.target.value);
+            if (isNaN(val)) return;
+            const clamped = Math.max(-180, Math.min(180, val));
+            document.getElementById('RotateSlider').value = clamped;
+            document.getElementById('RotateValue').value = clamped;
+            document.getElementById('RotateSlider').dispatchEvent(new Event('input'));
+        });
+
         document.getElementById('addLayerBtn').addEventListener('click', () => this.addLayer());
         document.getElementById('deleteLayerBtn').addEventListener('click', () => this.deleteActiveLayer());
         document.getElementById('moveUpLayerBtn').addEventListener('click', () => this.moveLayerUp());
@@ -421,10 +460,21 @@ class DrawingApp {
 
     getCanvasCoordinates(e) {
         const rect = this.viewportCanvas.getBoundingClientRect();
+        const screenX = e.clientX - rect.left;
+        const screenY = e.clientY - rect.top;
+        const cx = rect.width / 2;
+        const cy = rect.height / 2;
+        const rot = this.viewportRotation || 0;
+        const dx = screenX - cx;
+        const dy = screenY - cy;
+        const cos = Math.cos(rot);
+        const sin = Math.sin(rot);
+        const unrotX = dx * cos + dy * sin + cx;
+        const unrotY = -dx * sin + dy * cos + cy;
         const baseOffX = (rect.width - this.canvasCSSWidth) / 2 + this.panX;
         const baseOffY = (rect.height - this.canvasCSSHeight) / 2 + this.panY;
-        const relX = (e.clientX - rect.left - baseOffX) / this.zoom;
-        const relY = (e.clientY - rect.top - baseOffY) / this.zoom;
+        const relX = (unrotX - baseOffX) / this.zoom;
+        const relY = (unrotY - baseOffY) / this.zoom;
         return {
             x: relX * (this.canvasWidth / this.canvasCSSWidth),
             y: relY * (this.canvasHeight / this.canvasCSSHeight)
@@ -464,7 +514,15 @@ class DrawingApp {
         if (!this.canvasCSSWidth || !this.canvasCSSHeight) return;
 
         const t = this.getViewportTransform();
-        vpCtx.setTransform(t.sx, 0, 0, t.sy, t.tx, t.ty);
+        const rot = this.viewportRotation || 0;
+        if (rot !== 0) {
+            const cx = vpW / 2;
+            const cy = vpH / 2;
+            vpCtx.translate(cx, cy);
+            vpCtx.rotate(rot);
+            vpCtx.translate(-cx, -cy);
+        }
+        vpCtx.transform(t.sx, 0, 0, t.sy, t.tx, t.ty);
 
         vpCtx.fillStyle = '#ffffff';
         vpCtx.fillRect(0, 0, this.canvasWidth, this.canvasHeight);
@@ -631,17 +689,29 @@ class DrawingApp {
             e.preventDefault();
             this.isZooming = true;
             this.zoomStartY = e.clientY;
+        } else if (e.button === 1 && e.shiftKey) {
+            e.preventDefault();
+            this.isRotatingViewport = true;
+            const vpRect = this.viewportCanvas.getBoundingClientRect();
+            const cx = vpRect.left + vpRect.width / 2;
+            const cy = vpRect.top + vpRect.height / 2;
+            this.rotateStartAngle = Math.atan2(e.clientY - cy, e.clientX - cx) - (this.viewportRotation || 0);
         } else if (e.button === 1) {
             e.preventDefault();
             this.isPanning = true;
-            this.panStart = { x: e.clientX - this.panX, y: e.clientY - this.panY };
+            this.panStart = { x: e.clientX, y: e.clientY, panX: this.panX, panY: this.panY };
         }
     }
 
     handleDocumentMouseMove(e) {
         if (this.isPanning) {
-            this.panX = e.clientX - this.panStart.x;
-            this.panY = e.clientY - this.panStart.y;
+            const dx = e.clientX - this.panStart.x;
+            const dy = e.clientY - this.panStart.y;
+            const rot = this.viewportRotation || 0;
+            const cos = Math.cos(rot);
+            const sin = Math.sin(rot);
+            this.panX = this.panStart.panX + dx * cos + dy * sin;
+            this.panY = this.panStart.panY - dx * sin + dy * cos;
             this.applyTransform();
         }
     }
@@ -945,9 +1015,23 @@ class DrawingApp {
             }
             return;
         }
+        if (this.isRotatingViewport) {
+            const vpRect = this.viewportCanvas.getBoundingClientRect();
+            const cx = vpRect.left + vpRect.width / 2;
+            const cy = vpRect.top + vpRect.height / 2;
+            const angle = Math.atan2(e.clientY - cy, e.clientX - cx);
+            this.viewportRotation = angle - this.rotateStartAngle;
+            this.applyTransform();
+            return;
+        }
         if (this.isPanning) {
-            this.panX = e.clientX - this.panStart.x;
-            this.panY = e.clientY - this.panStart.y;
+            const dx = e.clientX - this.panStart.x;
+            const dy = e.clientY - this.panStart.y;
+            const rot = this.viewportRotation || 0;
+            const cos = Math.cos(rot);
+            const sin = Math.sin(rot);
+            this.panX = this.panStart.panX + dx * cos + dy * sin;
+            this.panY = this.panStart.panY - dx * sin + dy * cos;
             this.applyTransform();
             return;
         }
@@ -992,6 +1076,10 @@ class DrawingApp {
             this.isZooming = false;
             return;
         }
+        if (this.isRotatingViewport) {
+            this.isRotatingViewport = false;
+            return;
+        }
         if (this.isPanning) {
             this.isPanning = false;
             return;
@@ -1030,6 +1118,9 @@ class DrawingApp {
         }
 
         if (this.currentStroke && this.currentStroke.points.length > 0) {
+            if (this.currentStroke.points.length > 2) {
+                this.currentStroke.points = this.fitBrushCurve(this.currentStroke.points);
+            }
             activeLayer.vectorCommands.push(this.currentStroke);
         }
 
@@ -1937,6 +2028,82 @@ class DrawingApp {
         const cx = Math.max(rx, Math.min(px, rx + rw));
         const cy = Math.max(ry, Math.min(py, ry + rh));
         return this.dist(px, py, cx, cy);
+    }
+
+    simplifyPoints(points, epsilon) {
+        if (points.length <= 2) return points;
+        let maxDist = 0;
+        let maxIdx = 0;
+        const first = points[0];
+        const last = points[points.length - 1];
+        for (let i = 1; i < points.length - 1; i++) {
+            const d = this.distToSegment(points[i].x, points[i].y, first.x, first.y, last.x, last.y);
+            if (d > maxDist) {
+                maxDist = d;
+                maxIdx = i;
+            }
+        }
+        if (maxDist > epsilon) {
+            const left = this.simplifyPoints(points.slice(0, maxIdx + 1), epsilon);
+            const right = this.simplifyPoints(points.slice(maxIdx), epsilon);
+            return left.slice(0, -1).concat(right);
+        }
+        return [points[0], points[points.length - 1]];
+    }
+
+    computeAngle(prev, curr, next) {
+        const dx1 = prev.x - curr.x;
+        const dy1 = prev.y - curr.y;
+        const dx2 = next.x - curr.x;
+        const dy2 = next.y - curr.y;
+        const dot = dx1 * dx2 + dy1 * dy2;
+        const len1 = Math.hypot(dx1, dy1);
+        const len2 = Math.hypot(dx2, dy2);
+        if (len1 === 0 || len2 === 0) return 180;
+        const cosA = Math.max(-1, Math.min(1, dot / (len1 * len2)));
+        return Math.acos(cosA) * 180 / Math.PI;
+    }
+
+    fitBrushCurve(points) {
+        if (points.length <= 2) {
+            return points.map(p => ({ x: p.x, y: p.y }));
+        }
+        const simplified = this.simplifyPoints(points, 2);
+        if (simplified.length <= 2) {
+            return simplified.map(p => ({ x: p.x, y: p.y }));
+        }
+        const angleThreshold = 150;
+        const isCorner = [];
+        for (let i = 0; i < simplified.length; i++) {
+            if (i === 0 || i === simplified.length - 1) {
+                isCorner.push(true);
+            } else {
+                isCorner.push(this.computeAngle(simplified[i - 1], simplified[i], simplified[i + 1]) < angleThreshold);
+            }
+        }
+        const result = [];
+        for (let i = 0; i < simplified.length; i++) {
+            const p = simplified[i];
+            const isStart = isCorner[i] && i < simplified.length - 1 && !isCorner[i + 1];
+            const isEnd = isCorner[i] && i > 0 && !isCorner[i - 1];
+            const isInterior = !isCorner[i];
+            const point = { x: p.x, y: p.y };
+            if (isInterior || isStart || isEnd) {
+                if (!isCorner[i]) point.type = 'smooth';
+                const prev = i > 0 ? simplified[i - 1] : { x: 2 * p.x - simplified[1].x, y: 2 * p.y - simplified[1].y };
+                const next = i < simplified.length - 1 ? simplified[i + 1] : { x: 2 * p.x - simplified[simplified.length - 2].x, y: 2 * p.y - simplified[simplified.length - 2].y };
+                if (isInterior || isEnd) {
+                    point.cp1x = p.x - (next.x - prev.x) / 6;
+                    point.cp1y = p.y - (next.y - prev.y) / 6;
+                }
+                if (isInterior || isStart) {
+                    point.cp2x = p.x + (next.x - prev.x) / 6;
+                    point.cp2y = p.y + (next.y - prev.y) / 6;
+                }
+            }
+            result.push(point);
+        }
+        return result;
     }
 
     addLayer(name) {
@@ -3384,25 +3551,35 @@ class DrawingApp {
             return;
         }
 
-        if (e.key === '[' || e.key === ']') {
-            e.preventDefault();
-            const step = e.key === ']' ? 1 : -1;
-            const slider = document.getElementById('brushSize');
-            const newSize = Math.max(1, Math.min(100, this.brushSize + step));
-            this.brushSize = newSize;
-            slider.value = newSize;
-            document.getElementById('brushSizeValue').value = newSize;
-            this.viewportRender();
-            if (this.selectedIndices && this.selectedIndices.length > 0) {
-                this.saveState();
-                const activeLayer = this.layers[this.activeLayerIndex];
-                for (const idx of this.selectedIndices) {
-                    const cmd = activeLayer.vectorCommands[idx];
-                    if (cmd) cmd.size = newSize;
+        if (e.key === '[' || e.key === ']' || e.key === '{' || e.key === '}') {
+            if (!(e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                const step = (e.key === ']' || e.key === '}') ? 1 : -1;
+                if (this.currentTool === 'fill') {
+                    const slider = document.getElementById('expandOffset');
+                    const newVal = Math.max(0, Math.min(20, this.expandOffset + step * 0.5));
+                    this.expandOffset = newVal;
+                    slider.value = newVal;
+                    document.getElementById('expandOffsetValue').value = newVal;
+                } else {
+                    const slider = document.getElementById('brushSize');
+                    const newSize = Math.max(1, Math.min(100, this.brushSize + step));
+                    this.brushSize = newSize;
+                    slider.value = newSize;
+                    document.getElementById('brushSizeValue').value = newSize;
+                    if (this.selectedIndices && this.selectedIndices.length > 0) {
+                        this.saveState();
+                        const activeLayer = this.layers[this.activeLayerIndex];
+                        for (const idx of this.selectedIndices) {
+                            const cmd = activeLayer.vectorCommands[idx];
+                            if (cmd) cmd.size = newSize;
+                        }
+                    }
                 }
                 this.viewportRender();
+                return;
             }
-            return;
+            // else: Ctrl+[/]/[/] falls through to the ctrl block below
         }
 
         if (e.key === 'Escape') {
@@ -3455,6 +3632,19 @@ class DrawingApp {
             } else if (e.key === '0') {
                 e.preventDefault();
                 this.fitCanvasToContainer();
+            } else if ((e.key === '[' || e.key === '{' || e.key === ']' || e.key === '}') && e.shiftKey) {
+                e.preventDefault();
+                this.viewportRotation = 0;
+                this.updateRotateUI();
+                this.applyTransform();
+            } else if (e.key === '[' || e.key === '{') {
+                e.preventDefault();
+                this.viewportRotation = (this.viewportRotation || 0) - 5 * Math.PI / 180;
+                this.applyTransform();
+            } else if (e.key === ']' || e.key === '}') {
+                e.preventDefault();
+                this.viewportRotation = (this.viewportRotation || 0) + 5 * Math.PI / 180;
+                this.applyTransform();
             }
             return;
         }
