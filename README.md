@@ -6,6 +6,7 @@ A lightweight, browser-based vector drawing application with layer support, SVG 
 
 ### Drawing Tools
 - **Brush (B)** — Freehand drawing with adjustable size and opacity. Automatically converts strokes into optimized bezier curves (RDP simplification + Catmull-Rom handle fitting) for fewer points and smoother results.
+- **Pen (P)** — Click to place points one by one, creating a manual path. Finalize with Enter, double-click, or tool switch. Cancel with Escape or right-click. Paths are curve-fitted on completion.
 - **Line (L)** — Straight line tool.
 - **Rectangle (R)** — Draw rectangles with stroke.
 - **Circle (C)** — Draw ellipses and circles.
@@ -14,7 +15,7 @@ A lightweight, browser-based vector drawing application with layer support, SVG 
 ### Selection & Manipulation
 - **Select Tool (V)** — Click to select, drag for rectangular selection. Supports:
   - **Move** — Drag selected objects to reposition.
-  - **Resize** — Corner and edge handles for scaling objects (min 32px). Corner resize maintains aspect ratio. CTRL+edge handle also maintains aspect ratio.
+  - **Resize** — Corner and edge handles for scaling objects (min 1px). Corner resize maintains aspect ratio. CTRL+edge handle also maintains aspect ratio.
   - **Rotate** — Rotation handle above the selection bounding box.
   - **Center Horizontal** / **Center Vertical** — Align selected objects to canvas center.
 - **Image objects** — Imported images can be selected, moved, resized, and rotated like any other object.
@@ -61,6 +62,7 @@ A lightweight, browser-based vector drawing application with layer support, SVG 
 | Shortcut                  | Action                        |
 |---------------------------|-------------------------------|
 | **B**                     | Brush tool                    |
+| **P**                     | Pen tool                      |
 | **V**                     | Select tool                   |
 | **L**                     | Line tool                     |
 | **R**                     | Rectangle tool                |
@@ -115,3 +117,4 @@ Works in all modern browsers that support:
 - Blend modes are exported as CSS `mix-blend-mode` on `<g>` elements. While fully functional in browsers, some desktop vector editors (Inkscape, Illustrator) may not render CSS blend modes.
 - The flood fill tool works on pixel data and creates vector path representations of filled regions.
 - Brush strokes are automatically simplified and fitted with bezier curves on completion, reducing point count while preserving shape.
+- Pen tool paths are also curve-fitted on finalization. Use Enter, double-click, or switch tools to finalize. Use Escape or right-click to cancel a pen path in progress.

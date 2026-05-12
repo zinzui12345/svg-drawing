@@ -19,6 +19,9 @@ class DrawingApp {
         this.brushOpacity = 1;
         this.expandOffset = 2;
 
+        this.penPoints = [];
+        this.isPenActive = false;
+
         this.isDrawing = false;
         this.lastX = 0;
         this.lastY = 0;
@@ -172,8 +175,14 @@ class DrawingApp {
         this.viewportCanvas.addEventListener('mouseup', (e) => this.handleMouseUp(e));
         this.viewportCanvas.addEventListener('mouseleave', (e) => this.handleMouseLeave(e));
         this.viewportCanvas.addEventListener('mouseenter', (e) => this.handleMouseEnter(e));
+        this.viewportCanvas.addEventListener('dblclick', (e) => this.handleDoubleClick(e));
         document.addEventListener('wheel', (e) => this.handleWheel(e), { passive: false });
-        this.viewportCanvas.addEventListener('contextmenu', (e) => e.preventDefault());
+        this.viewportCanvas.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            if (this.currentTool === 'pen' && this.isPenActive) {
+                this.cancelPen();
+            }
+        });
         this.viewportCanvas.addEventListener('mousedown', (e) => this.handleContainerMouseDown(e));
 
         document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
@@ -559,7 +568,43 @@ class DrawingApp {
             this.drawSelectionBox(ctx);
         }
 
+        if (this.currentTool === 'pen' && this.isPenActive) {
+            ctx.strokeStyle = this.brushColor;
+            ctx.lineWidth = this.brushSize;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            if (this.penPoints.length >= 2) {
+                ctx.beginPath();
+                ctx.moveTo(this.penPoints[0].x, this.penPoints[0].y);
+                for (let i = 1; i < this.penPoints.length; i++) {
+                    ctx.lineTo(this.penPoints[i].x, this.penPoints[i].y);
+                }
+                ctx.stroke();
+            }
+            for (const p of this.penPoints) {
+                ctx.fillStyle = '#fff';
+                ctx.strokeStyle = '#4a9eff';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+            }
+        }
+
         if (!this.mouseOnCanvas) return;
+
+        if (this.currentTool === 'pen' && this.isPenActive && this.penPoints.length > 0) {
+            const last = this.penPoints[this.penPoints.length - 1];
+            ctx.strokeStyle = '#888';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.moveTo(last.x, last.y);
+            ctx.lineTo(this.mouseX, this.mouseY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
 
         if (this.currentTool === 'brush') {
             if (this.currentStroke && this.currentStroke.points.length > 0) {
@@ -634,15 +679,27 @@ class DrawingApp {
         }
     }
 
+    getHandleScale() {
+        const z = Math.max(this.zoom, 1);
+        const baseScale = this.canvasCSSWidth / this.canvasWidth;
+        const t = Math.min(1, (z - 1) / 49);
+        return { scale: 1 / (baseScale * z), t, baseScale, z };
+    }
+
     drawSelectionBox(ctx) {
         if (!this.selectionBBox || this.selectedIndices.length === 0) return;
 
         const bbox = this.selectionBBox;
-        const handleSize = 8;
+        const hs = this.getHandleScale();
+        const handleSize = (7.5 + 7.5 * hs.t) * hs.scale;
+        const dashLen = (4 + 4 * hs.t) * hs.scale;
+        const lineWidth = (1 + 1 * hs.t) * hs.scale;
+        const borderWidth = (2.5 + 2.5 * hs.t) * hs.scale;
+        const fontSize = Math.round((10 + 10 * hs.t) / (hs.baseScale * hs.z)) + 'px';
 
         ctx.strokeStyle = '#4a9eff';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 3]);
+        ctx.lineWidth = lineWidth;
+        ctx.setLineDash([dashLen, dashLen]);
         ctx.strokeRect(bbox.x, bbox.y, bbox.w, bbox.h);
         ctx.setLineDash([]);
 
@@ -659,7 +716,7 @@ class DrawingApp {
 
         ctx.fillStyle = '#ffffff';
         ctx.strokeStyle = '#4a9eff';
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = borderWidth;
         corners.forEach(c => {
             ctx.beginPath();
             ctx.fillRect(c.x - handleSize / 2, c.y - handleSize / 2, handleSize, handleSize);
@@ -667,8 +724,9 @@ class DrawingApp {
         });
 
         const rotateHandle = this.getRotateHandle();
-        ctx.beginPath();
         ctx.strokeStyle = '#4a9eff';
+        ctx.lineWidth = lineWidth;
+        ctx.beginPath();
         ctx.moveTo(bbox.cx, bbox.y);
         ctx.lineTo(rotateHandle.x, rotateHandle.y);
         ctx.stroke();
@@ -678,7 +736,7 @@ class DrawingApp {
         ctx.arc(rotateHandle.x, rotateHandle.y, handleSize, 0, Math.PI * 2);
         ctx.fill();
         ctx.fillStyle = '#ffffff';
-        ctx.font = '10px sans-serif';
+        ctx.font = fontSize + ' sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText('\u21BB', rotateHandle.x, rotateHandle.y);
@@ -741,6 +799,11 @@ class DrawingApp {
             return;
         }
 
+        if (this.currentTool === 'pen') {
+            this.handlePenMouseDown(coords);
+            return;
+        }
+
         this.clearSelection();
         this.showPathEditControls(false);
 
@@ -765,18 +828,73 @@ class DrawingApp {
         }
     }
 
+    handlePenMouseDown(coords) {
+        if (!this.isPenActive) {
+            this.clearSelection();
+            this.showPathEditControls(false);
+            this.saveState();
+            this.penPoints = [{ x: coords.x, y: coords.y }];
+            this.isPenActive = true;
+        } else {
+            this.penPoints.push({ x: coords.x, y: coords.y });
+        }
+        this.viewportRender();
+    }
+
+    finalizePen() {
+        if (!this.isPenActive || this.penPoints.length < 2) {
+            this.cancelPen();
+            return;
+        }
+        const activeLayer = this.layers[this.activeLayerIndex];
+        activeLayer.vectorCommands = activeLayer.vectorCommands || [];
+
+        let processedPoints = this.penPoints;
+        if (processedPoints.length > 2) {
+            processedPoints = this.fitBrushCurve(processedPoints);
+        } else {
+            processedPoints = processedPoints.map(p => ({ x: p.x, y: p.y }));
+        }
+
+        activeLayer.vectorCommands.push({
+            type: 'brush',
+            color: this.brushColor,
+            size: this.brushSize,
+            opacity: this.brushOpacity,
+            points: processedPoints
+        });
+
+        this.penPoints = [];
+        this.isPenActive = false;
+        this.viewportRender();
+    }
+
+    cancelPen() {
+        this.penPoints = [];
+        this.isPenActive = false;
+        this.viewportRender();
+    }
+
+    handleDoubleClick(e) {
+        if (e.button !== 0) return;
+        if (this.currentTool === 'pen' && this.isPenActive) {
+            this.finalizePen();
+        }
+    }
+
     handleSelectMouseDown(e, coords) {
         const activeLayer = this.layers[this.activeLayerIndex];
         const commands = activeLayer.vectorCommands || [];
-        const hitRadius = 6;
 
         if (this.isRotating) {
             this.isRotating = false;
             return;
         }
 
+        const hs = this.getHandleScale();
+        const handleSize = (7.5 + 7.5 * hs.t) * hs.scale;
         const rotateHandle = this.getRotateHandle();
-        if (rotateHandle && this.dist(coords.x, coords.y, rotateHandle.x, rotateHandle.y) < hitRadius + 4) {
+        if (rotateHandle && this.dist(coords.x, coords.y, rotateHandle.x, rotateHandle.y) < handleSize + 2) {
             this.saveState();
             this.isRotating = true;
             this.rotationCenter = { x: this.selectionBBox.cx, y: this.selectionBBox.cy };
@@ -1059,7 +1177,7 @@ class DrawingApp {
         if (this.currentTool === 'brush') {
             if (this.currentStroke) {
                 const last = this.currentStroke.points[this.currentStroke.points.length - 1];
-                if (!last || this.dist(coords.x, coords.y, last.x, last.y) >= 5) {
+                if (!last || this.dist(coords.x, coords.y, last.x, last.y) >= 3) {
                     this.currentStroke.points.push({ x: coords.x, y: coords.y });
                 }
             }
@@ -1303,6 +1421,9 @@ class DrawingApp {
     }
 
     setTool(tool) {
+        if (this.currentTool !== tool && this.currentTool === 'pen' && this.isPenActive) {
+            this.finalizePen();
+        }
         this.currentTool = tool;
         document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
             btn.classList.toggle('active', btn.dataset.tool === tool);
@@ -1313,7 +1434,7 @@ class DrawingApp {
         }
         const sizeGroup = document.getElementById('sizeToolGroup');
         if (sizeGroup) {
-            const showSize = ['brush', 'line', 'rect', 'circle'].includes(tool);
+            const showSize = ['brush', 'line', 'rect', 'circle', 'pen'].includes(tool);
             sizeGroup.style.display = showSize ? 'flex' : 'none';
         }
         const expandGroup = document.getElementById('expandToolGroup');
@@ -1370,7 +1491,8 @@ class DrawingApp {
     getResizeHandleAt(mx, my) {
         if (!this.selectionBBox) return null;
         const bbox = this.selectionBBox;
-        const handleSize = 8;
+        const hs = this.getHandleScale();
+        const handleSize = (7.5 + 7.5 * hs.t) * hs.scale;
         const handles = [
             { name: 'tl', x: bbox.x, y: bbox.y },
             { name: 'tm', x: bbox.x + bbox.w / 2, y: bbox.y },
@@ -1631,8 +1753,8 @@ class DrawingApp {
             if (handle === 'bl' || handle === 'tl') newBBox.x = anchorX - newBBox.w;
             if (handle === 'tr' || handle === 'tl') newBBox.y = anchorY - newBBox.h;
 
-            const minW = Math.max(32, Math.round(32 * aspect));
-            const minH = Math.max(32, Math.round(32 / aspect));
+            const minW = Math.max(16, Math.round(16 * aspect));
+            const minH = Math.max(16, Math.round(16 / aspect));
             const sMin = Math.max(minW / newBBox.w, minH / newBBox.h, 1);
             if (sMin > 1) {
                 newBBox.w *= sMin;
@@ -1665,8 +1787,8 @@ class DrawingApp {
                 newBBox.w = newBBox.h * aspect;
                 newBBox.x = bbox.cx - newBBox.w / 2;
             }
-            const minW = Math.max(32, Math.round(32 * aspect));
-            const minH = Math.max(32, Math.round(32 / aspect));
+            const minW = Math.max(16, Math.round(16 * aspect));
+            const minH = Math.max(16, Math.round(16 / aspect));
             const sMin = Math.max(minW / newBBox.w, minH / newBBox.h, 1);
             if (sMin > 1) {
                 newBBox.w *= sMin;
@@ -1689,8 +1811,8 @@ class DrawingApp {
 
         if (isCorner && start) {
             const aspect = start.w / start.h;
-            const minW = Math.max(32, Math.round(32 * aspect));
-            const minH = Math.max(32, Math.round(32 / aspect));
+            const minW = Math.max(16, Math.round(16 * aspect));
+            const minH = Math.max(16, Math.round(16 / aspect));
             const sMin = Math.max(minW / newBBox.w, minH / newBBox.h, 1);
             if (sMin > 1) {
                 newBBox.w *= sMin;
@@ -1703,8 +1825,8 @@ class DrawingApp {
                 }
             }
         } else {
-            if (newBBox.w < 32) newBBox.w = 32;
-            if (newBBox.h < 32) newBBox.h = 32;
+            if (newBBox.w < 16) newBBox.w = 16;
+            if (newBBox.h < 16) newBBox.h = 16;
         }
 
         const scaleX = newBBox.w / bbox.w;
@@ -3597,7 +3719,20 @@ class DrawingApp {
             // else: Ctrl+[/]/[/] falls through to the ctrl block below
         }
 
+        if (e.key === 'Enter') {
+            if (this.currentTool === 'pen' && this.isPenActive) {
+                e.preventDefault();
+                this.finalizePen();
+                return;
+            }
+        }
+
         if (e.key === 'Escape') {
+            if (this.currentTool === 'pen' && this.isPenActive) {
+                e.preventDefault();
+                this.cancelPen();
+                return;
+            }
             if (this.pathEditMode) {
                 e.preventDefault();
                 this.togglePathEdit();
@@ -3743,6 +3878,11 @@ class DrawingApp {
             case 'f':
                 if (!this.pathEditMode) {
                     this.setTool('fill');
+                }
+                break;
+            case 'p':
+                if (!this.pathEditMode) {
+                    this.setTool('pen');
                 }
                 break;
         }
