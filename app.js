@@ -569,6 +569,9 @@ class DrawingApp {
         }
 
         if (this.currentTool === 'pen' && this.isPenActive) {
+            const hs = this.getHandleScale();
+            const pointRadius = (7.5 + 7.5 * hs.t) * hs.scale;
+            const borderWidth = (2.5 + 2.5 * hs.t) * hs.scale;
             ctx.strokeStyle = this.brushColor;
             ctx.lineWidth = this.brushSize;
             ctx.lineCap = 'round';
@@ -584,9 +587,9 @@ class DrawingApp {
             for (const p of this.penPoints) {
                 ctx.fillStyle = '#fff';
                 ctx.strokeStyle = '#4a9eff';
-                ctx.lineWidth = 2;
+                ctx.lineWidth = borderWidth;
                 ctx.beginPath();
-                ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+                ctx.arc(p.x, p.y, pointRadius, 0, Math.PI * 2);
                 ctx.fill();
                 ctx.stroke();
             }
@@ -595,10 +598,13 @@ class DrawingApp {
         if (!this.mouseOnCanvas) return;
 
         if (this.currentTool === 'pen' && this.isPenActive && this.penPoints.length > 0) {
+            const hs = this.getHandleScale();
+            const dashLen = (4 + 4 * hs.t) * hs.scale;
+            const previewWidth = (2.5 + 2.5 * hs.t) * hs.scale;
             const last = this.penPoints[this.penPoints.length - 1];
             ctx.strokeStyle = '#888';
-            ctx.lineWidth = 2;
-            ctx.setLineDash([4, 4]);
+            ctx.lineWidth = previewWidth;
+            ctx.setLineDash([dashLen, dashLen]);
             ctx.beginPath();
             ctx.moveTo(last.x, last.y);
             ctx.lineTo(this.mouseX, this.mouseY);
@@ -967,7 +973,7 @@ class DrawingApp {
         this.updateDeleteButton();
         this.syncColorPickerToSelection();
         this.syncOpacityToSelection();
-        const hasBrush = this.selectedIndices.some(idx => activeLayer.vectorCommands[idx].type === 'brush');
+        const hasBrush = this.selectedIndices.some(idx => ['brush', 'fill'].includes(activeLayer.vectorCommands[idx].type));
         this.showPathEditControls(hasBrush);
         this.syncSizeToSelection();
         this.viewportRender();
@@ -1396,7 +1402,7 @@ class DrawingApp {
             if (dimOther && i !== this.activeLayerIndex) alpha *= 0.5;
 
             for (const cmd of layer.vectorCommands || []) {
-                ctx.globalAlpha = alpha;
+                ctx.globalAlpha = alpha * (cmd.opacity !== undefined ? cmd.opacity : 1);
                 ctx.globalCompositeOperation = layer.blendMode;
                 this.redrawCommand(ctx, cmd);
             }
@@ -1548,9 +1554,10 @@ class DrawingApp {
     getCommandBBox(cmd) {
         const margin = cmd.size ? cmd.size / 2 : 2;
         if (cmd.type === 'brush' || cmd.type === 'fill') {
-            if (cmd.points.length === 0) return null;
+            if (Array.isArray(cmd.points) && cmd.points.length === 0) return null;
+            if (!Array.isArray(cmd.points) && (!cmd.points.outer || cmd.points.outer.length === 0)) return null;
             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-            for (const p of cmd.points) {
+            this.forEachFillPoint(cmd.points, p => {
                 minX = Math.min(minX, p.x);
                 minY = Math.min(minY, p.y);
                 maxX = Math.max(maxX, p.x);
@@ -1559,7 +1566,7 @@ class DrawingApp {
                 if (p.cp1y !== undefined) { minY = Math.min(minY, p.cp1y); maxY = Math.max(maxY, p.cp1y); }
                 if (p.cp2x !== undefined) { minX = Math.min(minX, p.cp2x); maxX = Math.max(maxX, p.cp2x); }
                 if (p.cp2y !== undefined) { minY = Math.min(minY, p.cp2y); maxY = Math.max(maxY, p.cp2y); }
-            }
+            });
             return { minX: minX - margin, minY: minY - margin, maxX: maxX + margin, maxY: maxY + margin };
         } else if (cmd.type === 'line') {
             return {
@@ -1592,8 +1599,8 @@ class DrawingApp {
         return null;
     }
 
-    hitTestCommand(cmd, mx, my) {
-        const hitRadius = Math.max(cmd.size ? cmd.size / 2 : 4, 6);
+    hitTestCommand(cmd, mx, my, overrideRadius) {
+        const hitRadius = overrideRadius !== undefined ? overrideRadius : Math.max(cmd.size ? cmd.size / 2 : 4, 6);
         if (cmd.type === 'brush') {
             for (const p of cmd.points) {
                 if (this.dist(mx, my, p.x, p.y) < hitRadius) return true;
@@ -1603,7 +1610,16 @@ class DrawingApp {
             }
             return false;
         } else if (cmd.type === 'fill') {
-            return this.isPointInPolygon(mx, my, cmd.points);
+            if (Array.isArray(cmd.points)) {
+                return this.isPointInPolygon(mx, my, cmd.points);
+            }
+            if (!this.isPointInPolygon(mx, my, cmd.points.outer)) return false;
+            if (cmd.points.holes) {
+                for (const hole of cmd.points.holes) {
+                    if (this.isPointInPolygon(mx, my, hole)) return false;
+                }
+            }
+            return true;
         } else if (cmd.type === 'line') {
             return this.distToSegment(mx, my, cmd.x1, cmd.y1, cmd.x2, cmd.y2) < hitRadius;
         } else if (cmd.type === 'rect') {
@@ -1647,17 +1663,28 @@ class DrawingApp {
         return inside;
     }
 
+    forEachFillPoint(fillPoints, fn) {
+        if (Array.isArray(fillPoints)) {
+            fillPoints.forEach(fn);
+        } else {
+            if (fillPoints.outer) fillPoints.outer.forEach(fn);
+            if (fillPoints.holes) {
+                for (const hole of fillPoints.holes) hole.forEach(fn);
+            }
+        }
+    }
+
     moveSelected(dx, dy) {
         const activeLayer = this.layers[this.activeLayerIndex];
         for (const idx of this.selectedIndices) {
             const cmd = activeLayer.vectorCommands[idx];
             if (cmd.type === 'brush' || cmd.type === 'fill') {
-                for (const p of cmd.points) {
+                this.forEachFillPoint(cmd.points, p => {
                     p.x += dx;
                     p.y += dy;
                     if (p.cp1x !== undefined) { p.cp1x += dx; p.cp1y += dy; }
                     if (p.cp2x !== undefined) { p.cp2x += dx; p.cp2y += dy; }
-                }
+                });
             } else if (cmd.type === 'image') {
                 cmd.x += dx;
                 cmd.y += dy;
@@ -1682,7 +1709,7 @@ class DrawingApp {
         for (const idx of this.selectedIndices) {
             const cmd = activeLayer.vectorCommands[idx];
             if (cmd.type === 'brush' || cmd.type === 'fill') {
-                for (const p of cmd.points) {
+                this.forEachFillPoint(cmd.points, p => {
                     const dx = p.x - cx, dy = p.y - cy;
                     p.x = cx + dx * cos - dy * sin;
                     p.y = cy + dx * sin + dy * cos;
@@ -1696,7 +1723,7 @@ class DrawingApp {
                         p.cp2x = cx + cdx * cos - cdy * sin;
                         p.cp2y = cy + cdx * sin + cdy * cos;
                     }
-                }
+                });
             } else if (cmd.type === 'image') {
                 const dx = cmd.x - cx, dy = cmd.y - cy;
                 const dx2 = cmd.x + cmd.width - cx, dy2 = cmd.y + cmd.height - cy;
@@ -1835,7 +1862,7 @@ class DrawingApp {
         for (const idx of this.selectedIndices) {
             const cmd = activeLayer.vectorCommands[idx];
             if (cmd.type === 'brush' || cmd.type === 'fill') {
-                for (const p of cmd.points) {
+                this.forEachFillPoint(cmd.points, p => {
                     p.x = newBBox.x + (p.x - bbox.x) * scaleX;
                     p.y = newBBox.y + (p.y - bbox.y) * scaleY;
                     if (p.cp1x !== undefined) {
@@ -1846,7 +1873,7 @@ class DrawingApp {
                         p.cp2x = newBBox.x + (p.cp2x - bbox.x) * scaleX;
                         p.cp2y = newBBox.y + (p.cp2y - bbox.y) * scaleY;
                     }
-                }
+                });
             } else if (cmd.type === 'image') {
                 cmd.x = newBBox.x + (cmd.x - bbox.x) * scaleX;
                 cmd.y = newBBox.y + (cmd.y - bbox.y) * scaleY;
@@ -1890,16 +1917,19 @@ class DrawingApp {
                         ctx.lineTo(curr.x, curr.y);
                     }
                 }
+                if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= Math.max(cmd.size * 3 + 5, 25)) ctx.closePath();
                 ctx.stroke();
             }
         } else if (cmd.type === 'fill') {
             ctx.fillStyle = cmd.color;
             ctx.beginPath();
-            if (cmd.points.length > 0) {
-                ctx.moveTo(cmd.points[0].x, cmd.points[0].y);
-                for (let i = 1; i < cmd.points.length; i++) {
-                    const prev = cmd.points[i - 1];
-                    const curr = cmd.points[i];
+            const pts = cmd.points;
+            const drawContour = (contour) => {
+                if (!contour || contour.length === 0) return;
+                ctx.moveTo(contour[0].x, contour[0].y);
+                for (let i = 1; i < contour.length; i++) {
+                    const prev = contour[i - 1];
+                    const curr = contour[i];
                     if (prev.cp2x !== undefined && curr.cp1x !== undefined) {
                         ctx.bezierCurveTo(prev.cp2x, prev.cp2y, curr.cp1x, curr.cp1y, curr.x, curr.y);
                     } else {
@@ -1907,8 +1937,16 @@ class DrawingApp {
                     }
                 }
                 ctx.closePath();
-                ctx.fill();
+            };
+            if (Array.isArray(pts)) {
+                drawContour(pts);
+            } else {
+                drawContour(pts.outer);
+                if (pts.holes) {
+                    for (const hole of pts.holes) drawContour(hole);
+                }
             }
+            ctx.fill('evenodd');
         } else if (cmd.type === 'line') {
             ctx.strokeStyle = cmd.color;
             ctx.lineWidth = cmd.size;
@@ -1942,81 +1980,160 @@ class DrawingApp {
         return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
     }
 
-    performFloodFill(x, y) {
-        x = Math.round(x);
-        y = Math.round(y);
-        if (x < 0 || x >= this.canvasWidth || y < 0 || y >= this.canvasHeight) return;
+    brushToLoopInterior(cmd) {
+        const pts = cmd.points;
+        if (!pts || pts.length === 0) return null;
 
-        const temp = this.getTempCanvas(this.canvasWidth, this.canvasHeight);
-        const tempCtx = temp.getContext('2d');
-        this.renderAllToCtx(tempCtx, this.canvasWidth, this.canvasHeight);
+        const flat = this.sampleStroke(pts);
+        if (flat.length < 3) return null;
 
-        const imageData = tempCtx.getImageData(0, 0, this.canvasWidth, this.canvasHeight);
-        const data = imageData.data;
-        const idx = (y * this.canvasWidth + x) * 4;
-        const targetR = data[idx], targetG = data[idx + 1], targetB = data[idx + 2], targetA = data[idx + 3];
+        const closed = cmd.closed || (flat.length > 2 &&
+            Math.hypot(flat[0].x - flat[flat.length - 1].x, flat[0].y - flat[flat.length - 1].y) <= Math.max(cmd.size * 3 + 5, 25));
 
-        const fillColor = this.hexToRgb(this.brushColor);
-        if (targetR === fillColor.r && targetG === fillColor.g && targetB === fillColor.b && targetA === 255) return;
+        if (!closed) return null;
 
-        const tolerance = 32;
-        const visited = new Uint8Array(this.canvasWidth * this.canvasHeight);
-        const fillMask = new Uint8Array(this.canvasWidth * this.canvasHeight);
-        const stack = [];
-
-        const colorMatch = (i) => {
-            return Math.abs(data[i] - targetR) <= tolerance &&
-                   Math.abs(data[i + 1] - targetG) <= tolerance &&
-                   Math.abs(data[i + 2] - targetB) <= tolerance &&
-                   Math.abs(data[i + 3] - targetA) <= tolerance;
-        };
-
-        stack.push(x, y);
-        while (stack.length > 0) {
-            const cy = stack.pop();
-            const cx = stack.pop();
-            if (cx < 0 || cx >= this.canvasWidth || cy < 0 || cy >= this.canvasHeight) continue;
-            const ci = cy * this.canvasWidth + cx;
-            if (visited[ci]) continue;
-            const pi = ci * 4;
-            if (!colorMatch(pi)) continue;
-
-            visited[ci] = 1;
-            fillMask[ci] = 1;
-
-            stack.push(cx + 1, cy);
-            stack.push(cx - 1, cy);
-            stack.push(cx, cy + 1);
-            stack.push(cx, cy - 1);
+        const hw = cmd.size / 2;
+        const points = [...flat];
+        if (points[0].x !== points[points.length - 1].x || points[0].y !== points[points.length - 1].y) {
+            points.push({ x: points[0].x, y: points[0].y });
         }
 
-        const boundaryPoints = this.expandBoundary(this.extractBoundary(fillMask, x, y), this.expandOffset);
-        if (boundaryPoints.length < 3) return;
+        const n = points.length - 1;
+        if (n < 3) return null;
+
+        let area = 0;
+        for (let i = 0; i < n; i++) {
+            area += (points[i].x * points[i + 1].y - points[i + 1].x * points[i].y);
+        }
+        const isCCW = area > 0;
+
+        const inner = [];
+        for (let i = 0; i < n; i++) {
+            const prev = points[i === 0 ? n - 1 : i - 1];
+            const curr = points[i];
+            const next = points[i + 1];
+
+            const dx1 = curr.x - prev.x, dy1 = curr.y - prev.y;
+            const dx2 = next.x - curr.x, dy2 = next.y - curr.y;
+            const dx = dx1 + dx2, dy = dy1 + dy2;
+            const len = Math.hypot(dx, dy);
+
+            if (len < 0.001) {
+                inner.push({ x: curr.x, y: curr.y });
+                continue;
+            }
+
+            const nx = -dy / len * hw;
+            const ny = dx / len * hw;
+            const sign = isCCW ? -1 : 1;
+            inner.push({ x: curr.x + sign * nx, y: curr.y + sign * ny });
+        }
+
+        const innerArea = Math.abs(this.signedArea(inner));
+        if (innerArea < 1) return null;
+
+        return inner;
+    }
+
+    performFloodFill(x, y) {
+        console.log('performFloodFill', x, y);
+        if (x < 0 || x >= this.canvasWidth || y < 0 || y >= this.canvasHeight) return;
+
+        const activeLayer = this.layers[this.activeLayerIndex];
+        const commands = activeLayer.vectorCommands || [];
+
+        const interiors = [];
+        for (const cmd of commands) {
+            if (cmd.type !== 'brush') continue;
+            const interior = this.brushToLoopInterior(cmd);
+            if (interior) interiors.push(interior);
+        }
+
+        if (interiors.length === 0) {
+            this.saveState();
+            commands.push({
+                type: 'fill', color: this.brushColor, opacity: this.brushOpacity,
+                points: [
+                    { x: 0, y: 0 }, { x: this.canvasWidth, y: 0 },
+                    { x: this.canvasWidth, y: this.canvasHeight }, { x: 0, y: this.canvasHeight },
+                    { x: 0, y: 0 }
+                ]
+            });
+            this.viewportRender();
+            return;
+        }
+
+        interiors.sort((a, b) => Math.abs(this.signedArea(a)) - Math.abs(this.signedArea(b)));
+
+        let containingRing = null;
+        for (const ring of interiors) {
+            if (this.pointInRing(x, y, ring)) {
+                containingRing = ring;
+                break;
+            }
+        }
+
+        if (!containingRing) {
+            this.saveState();
+            commands.push({
+                type: 'fill', color: this.brushColor, opacity: this.brushOpacity,
+                points: [
+                    { x: 0, y: 0 }, { x: this.canvasWidth, y: 0 },
+                    { x: this.canvasWidth, y: this.canvasHeight }, { x: 0, y: this.canvasHeight },
+                    { x: 0, y: 0 }
+                ]
+            });
+            this.viewportRender();
+            return;
+        }
+
+        const containingArea = Math.abs(this.signedArea(containingRing));
+        const holes = [];
+        for (const ring of interiors) {
+            if (ring === containingRing) continue;
+            const childArea = Math.abs(this.signedArea(ring));
+            if (childArea >= containingArea) continue;
+            if (!this.ringContainsAnother(containingRing, ring)) continue;
+
+            let isDirect = true;
+            for (const other of interiors) {
+                if (other === containingRing || other === ring) continue;
+                const otherArea = Math.abs(this.signedArea(other));
+                if (otherArea >= childArea) continue;
+                if (this.ringContainsAnother(other, ring) && this.ringContainsAnother(containingRing, other)) {
+                    isDirect = false;
+                    break;
+                }
+            }
+            if (isDirect) holes.push(ring);
+        }
+
+        const fillRegion = { outer: containingRing, holes };
+
+        if (this.expandOffset !== 0) {
+            Object.assign(fillRegion, this.expandBoundary(fillRegion, this.expandOffset));
+        }
 
         this.saveState();
-        const activeLayer = this.layers[this.activeLayerIndex];
-        activeLayer.vectorCommands = activeLayer.vectorCommands || [];
-
-        const insertIndex = this.findFillInsertIndex(activeLayer.vectorCommands, boundaryPoints);
-        const fillCmd = {
-            type: 'fill',
-            color: this.brushColor,
-            opacity: this.brushOpacity,
-            points: boundaryPoints
-        };
-        activeLayer.vectorCommands.splice(insertIndex, 0, fillCmd);
+        const insertIndex = this.findFillInsertIndex(commands, fillRegion);
+        commands.splice(insertIndex, 0, {
+            type: 'fill', color: this.brushColor, opacity: this.brushOpacity,
+            points: fillRegion
+        });
         this.viewportRender();
     }
 
-    findFillInsertIndex(commands, boundaryPoints) {
+    findFillInsertIndex(commands, contours) {
+        const outerPoints = contours.outer || contours;
         const boundaryHitCounts = new Map();
-        const step = Math.max(1, Math.floor(boundaryPoints.length / 200));
-        for (let i = 0; i < boundaryPoints.length; i += step) {
-            const bp = boundaryPoints[i];
+        const step = Math.max(1, Math.floor(outerPoints.length / 200));
+        for (let i = 0; i < outerPoints.length; i += step) {
+            const bp = outerPoints[i];
             for (let ci = commands.length - 1; ci >= 0; ci--) {
                 const cmd = commands[ci];
                 if (cmd.type === 'fill') continue;
-                if (this.hitTestCommand(cmd, bp.x, bp.y)) {
+                const r = Math.max(cmd.size ? cmd.size / 2 : 4, 6) + 2;
+                if (this.hitTestCommand(cmd, bp.x, bp.y, r)) {
                     boundaryHitCounts.set(ci, (boundaryHitCounts.get(ci) || 0) + 1);
                     break;
                 }
@@ -2030,99 +2147,407 @@ class DrawingApp {
         return minIndex;
     }
 
-    extractBoundary(fillMask, seedX, seedY) {
-        const w = this.canvasWidth, h = this.canvasHeight;
-        const boundary = [];
-        const inFill = (x, y) => x >= 0 && x < w && y >= 0 && y < h && fillMask[y * w + x];
-        const isEdge = (x, y) => {
-            if (!inFill(x, y)) return false;
-            return !inFill(x + 1, y) || !inFill(x - 1, y) || !inFill(x, y + 1) || !inFill(x, y - 1);
-        };
-
-        let sx = -1, sy = -1;
-        for (let y = Math.max(0, seedY - 200); y < Math.min(h, seedY + 200); y++) {
-            let found = false;
-            for (let x = Math.max(0, seedX - 200); x < Math.min(w, seedX + 200); x++) {
-                if (isEdge(x, y)) { sx = x; sy = y; found = true; break; }
-            }
-            if (found) break;
-        }
-        if (sx === -1) return [];
-
-        const dirs = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
-        let cx = sx, cy = sy;
-        let prevDir = 0;
-
-        boundary.push({ x: cx, y: cy });
-
-        for (let iter = 0; iter < 50000; iter++) {
-            let found = false;
-            for (let d = 0; d < 8; d++) {
-                const dirIdx = (prevDir + d) % 8;
-                const nx = cx + dirs[dirIdx][0];
-                const ny = cy + dirs[dirIdx][1];
-                if (isEdge(nx, ny)) {
-                    if (nx === sx && ny === sy) {
-                        boundary.push({ x: sx, y: sy });
-                        return this.simplifyBoundary(boundary);
-                    }
-                    prevDir = (dirIdx + 5) % 8;
-                    cx = nx;
-                    cy = ny;
-                    boundary.push({ x: cx, y: cy });
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) break;
-        }
-
-        return this.simplifyBoundary(boundary);
+    _toPb(poly) {
+        if (!poly) return poly;
+        return { regions: poly.regions.map(r => r.map(p => [p.x, p.y])), inverted: poly.inverted };
+    }
+    _fromPb(poly) {
+        if (!poly) return poly;
+        return { regions: poly.regions.map(r => r.map(p => ({ x: p[0], y: p[1] }))), inverted: poly.inverted };
+    }
+    _pbUnion(a, b) {
+        return this._fromPb(PolyBool.union(this._toPb(a), this._toPb(b)));
+    }
+    _pbDifference(a, b) {
+        return this._fromPb(PolyBool.difference(this._toPb(a), this._toPb(b)));
     }
 
-    simplifyBoundary(points) {
-        if (points.length <= 3) return points;
-        const simplified = [points[0]];
-        let prev = points[0];
-        for (let i = 1; i < points.length - 1; i++) {
+    commandsToPolyBool(commands) {
+        let result = null;
+        for (const cmd of commands) {
+            const polys = this.cmdToPolygons(cmd);
+            if (!polys || !polys.regions || polys.regions.length === 0) continue;
+            if (polys.regions.some(r => r.length < 3)) continue;
+            if (result === null) {
+                result = polys;
+            } else {
+                try { result = this._pbUnion(result, polys); }
+                catch (e) { console.warn('PolyBool union skipped command:', e); }
+            }
+        }
+        return result;
+    }
+
+    // subtract obstacles one at a time to avoid union fragmentation
+    subtractAllFromBbox(bbox, commands) {
+        let result = bbox;
+        for (const cmd of commands) {
+            const polys = this.cmdToPolygons(cmd);
+            if (!polys || !polys.regions || polys.regions.length === 0) continue;
+            if (polys.regions.some(r => r.length < 3)) continue;
+            try {
+                result = this._pbDifference(result, polys);
+                console.log('subtractAll: after subtracting', cmd.type, 'regions=', result.regions.length, 'inverted=', result.inverted, 'areas=', result.regions.map(r => Math.abs(this.signedArea(r)).toFixed(0)));
+            }
+            catch (e) { console.warn('difference failed:', e); }
+        }
+        if (result.inverted) {
+            console.log('subtractAll: normalizing inverted result');
+            result = this._pbDifference(bbox, { regions: result.regions, inverted: false });
+        }
+        return result;
+    }
+
+    cmdToPolygons(cmd) {
+        console.log('cmdToPolygons type:', cmd.type);
+        let result;
+        switch (cmd.type) {
+            case 'brush': result = this.brushToPolygon(cmd); break;
+            case 'fill': result = this.fillToPolygon(cmd); break;
+            case 'line': result = this.lineToPolygon(cmd); break;
+            case 'rect': result = this.rectToPolygon(cmd); break;
+            case 'circle': result = this.circleToPolygon(cmd); break;
+            case 'image': result = this.imageToPolygon(cmd); break;
+            default: result = null;
+        }
+        console.log('cmdToPolygons result:', result ? 'regions=' + result.regions.length : 'null');
+        return result;
+    }
+
+    brushToPolygon(cmd) {
+        const pts = cmd.points;
+        if (!pts || pts.length === 0) { console.log('brushToPolygon: no points'); return null; }
+        console.log('brushToPolygon: pts.length=' + pts.length + ', size=' + cmd.size + ', flat=', this.sampleStroke(pts).length);
+        if (pts.length === 1) {
+            const r = cmd.size / 2;
+            const ring = [];
+            for (let i = 0; i <= 8; i++) {
+                const a = (i / 8) * Math.PI * 2;
+                ring.push({ x: pts[0].x + r * Math.cos(a), y: pts[0].y + r * Math.sin(a) });
+            }
+            return { regions: [ring], inverted: false };
+        }
+        const flat = this.sampleStroke(pts);
+        if (flat.length < 2) { console.log('brushToPolygon: flat too short'); return null; }
+        const closed = cmd.closed || (flat.length > 2 &&
+            Math.hypot(flat[0].x - flat[flat.length - 1].x, flat[0].y - flat[flat.length - 1].y) <= Math.max(cmd.size * 3 + 5, 25));
+        if (closed && flat.length > 2 &&
+            (flat[0].x !== flat[flat.length - 1].x || flat[0].y !== flat[flat.length - 1].y)) {
+            flat.push({ x: flat[0].x, y: flat[0].y });
+            console.log('brushToPolygon: closed, flat now', flat.length, 'points');
+        }
+        const hw = cmd.size / 2;
+        const obstacle = this.brushToPolygonObstacle(flat, hw);
+        console.log('brushToPolygon: obstacle regions=' + (obstacle ? obstacle.regions.length : 'null'));
+        if (!obstacle || !obstacle.regions || obstacle.regions.length === 0) {
+            console.log('brushToPolygon: quad union failed, trying strokeToOutline');
+            const outline = this.strokeToOutline(flat, hw, closed);
+            if (!outline || outline.length < 4) return null;
+            return { regions: [outline], inverted: false };
+        }
+        return obstacle;
+    }
+
+    sampleStroke(points) {
+        const result = [{ x: points[0].x, y: points[0].y }];
+        for (let i = 0; i < points.length - 1; i++) {
             const curr = points[i];
             const next = points[i + 1];
-            const dx1 = curr.x - prev.x, dy1 = curr.y - prev.y;
-            const dx2 = next.x - curr.x, dy2 = next.y - curr.y;
-            const cross = dx1 * dy2 - dy1 * dx2;
-            if (Math.abs(cross) > 0.5) {
-                simplified.push(curr);
-                prev = curr;
+            if (curr.cp2x !== undefined && next.cp1x !== undefined) {
+                for (let s = 1; s < 8; s++) {
+                    const t = s / 8;
+                    const mt = 1 - t;
+                    result.push({
+                        x: mt*mt*mt*curr.x + 3*mt*mt*t*(curr.cp2x || curr.x) + 3*mt*t*t*(next.cp1x || next.x) + t*t*t*next.x,
+                        y: mt*mt*mt*curr.y + 3*mt*mt*t*(curr.cp2y || curr.y) + 3*mt*t*t*(next.cp1y || next.y) + t*t*t*next.y
+                    });
+                }
             }
+            result.push({ x: next.x, y: next.y });
         }
-        simplified.push(points[points.length - 1]);
-        return simplified;
+        return result;
     }
 
-    expandBoundary(points, offset) {
-        if (points.length < 3) return points;
-        const closed = points[points.length - 1].x === points[0].x && points[points.length - 1].y === points[0].y;
-        const n = closed ? points.length - 1 : points.length;
-        let cx = 0, cy = 0;
-        for (let i = 0; i < n; i++) { cx += points[i].x; cy += points[i].y; }
-        cx /= n;
-        cy /= n;
-        let maxDist = 0;
-        for (let i = 0; i < n; i++) {
-            const d = (points[i].x - cx) ** 2 + (points[i].y - cy) ** 2;
-            if (d > maxDist) maxDist = d;
+    // Build brush obstacle by merging segment quads one at a time
+    brushToPolygonObstacle(flat, hw) {
+        if (flat.length < 2) return null;
+        let merged = null;
+        let quadCount = 0;
+        for (let i = 0; i < flat.length - 1; i++) {
+            const p = flat[i], next = flat[i + 1];
+            const dx = next.x - p.x, dy = next.y - p.y;
+            const len = Math.hypot(dx, dy);
+            if (len < 0.001) continue;
+            quadCount++;
+            const ux = dx / len, uy = dy / len;
+            const nx = -uy * hw, ny = ux * hw;
+            let e0 = hw * 0.5, e1 = hw * 0.5;
+            if (i === 0) e0 = hw * 3;
+            if (i === flat.length - 2) e1 = hw * 3;
+            const ex0 = ux * e0, ey0 = uy * e0;
+            const ex1 = ux * e1, ey1 = uy * e1;
+            const quad = [
+                { x: p.x - nx - ex0, y: p.y - ny - ey0 },
+                { x: p.x + nx - ex0, y: p.y + ny - ey0 },
+                { x: next.x + nx + ex1, y: next.y + ny + ey1 },
+                { x: next.x - nx + ex1, y: next.y - ny + ey1 },
+                { x: p.x - nx - ex0, y: p.y - ny - ey0 }
+            ];
+            const quadPoly = { regions: [quad], inverted: false };
+            if (merged === null) merged = quadPoly;
+            else { try { merged = this._pbUnion(merged, quadPoly); } catch (e) { return null; } }
         }
-        maxDist = Math.sqrt(maxDist) || 1;
-        const scale = (maxDist + offset) / maxDist;
-        const expanded = [];
-        for (let i = 0; i < n; i++) {
-            expanded.push({
-                x: cx + (points[i].x - cx) * scale,
-                y: cy + (points[i].y - cy) * scale
-            });
+        console.log('brushToPolygonObstacle: quads=' + quadCount + ' result_regions=' + (merged ? merged.regions.length : 'null'));
+        return merged;
+    }
+
+    strokeToOutline(points, halfWidth, closed) {
+        const n = points.length;
+        if (n < 2) return null;
+        const isClosed = closed !== undefined ? closed : (n > 2 &&
+            Math.abs(points[0].x - points[n-1].x) + Math.abs(points[0].y - points[n-1].y) < 1);
+        const m = isClosed ? n - 1 : n;
+        if (m < 2) return null;
+        const left = [], right = [];
+        for (let i = 0; i < m; i++) {
+            let dx, dy;
+            const prev = isClosed ? points[(i - 1 + m) % m] : (i > 0 ? points[i - 1] : null);
+            const next = isClosed ? points[(i + 1) % m] : (i < m - 1 ? points[i + 1] : null);
+            if (!prev) { dx = next.x - points[i].x; dy = next.y - points[i].y; }
+            else if (!next) { dx = points[i].x - prev.x; dy = points[i].y - prev.y; }
+            else {
+                const ux1 = points[i].x - prev.x, uy1 = points[i].y - prev.y;
+                const ux2 = next.x - points[i].x, uy2 = next.y - points[i].y;
+                if (Math.hypot(ux1, uy1) < 0.001) { dx = ux2; dy = uy2; }
+                else if (Math.hypot(ux2, uy2) < 0.001) { dx = ux1; dy = uy1; }
+                else { dx = ux1 + ux2; dy = uy1 + uy2; }
+            }
+            const len = Math.hypot(dx, dy);
+            if (len < 0.001) { left.push(points[i]); right.push(points[i]); continue; }
+            const nx = -dy / len * halfWidth, ny = dx / len * halfWidth;
+            left.push({ x: points[i].x + nx, y: points[i].y + ny });
+            right.push({ x: points[i].x - nx, y: points[i].y - ny });
         }
-        expanded.push({ ...expanded[0] });
-        return expanded;
+        const outline = [right[0]];
+        for (let i = 1; i < m; i++) outline.push(right[i]);
+        for (let i = m - 1; i >= 0; i--) outline.push(left[i]);
+        outline.push({ x: right[0].x, y: right[0].y });
+        return outline;
+    }
+
+    fillToPolygon(cmd) {
+        const pts = cmd.points;
+        if (!pts) return null;
+        const regions = [];
+        if (Array.isArray(pts)) {
+            if (pts.length >= 3) regions.push([...pts]);
+        } else {
+            if (pts.outer && pts.outer.length >= 3) regions.push([...pts.outer]);
+            if (pts.holes) {
+                for (const hole of pts.holes) {
+                    if (hole.length >= 3) regions.push([...hole]);
+                }
+            }
+        }
+        return regions.length > 0 ? { regions, inverted: false } : null;
+    }
+
+    lineToPolygon(cmd) {
+        const dx = cmd.x2 - cmd.x1, dy = cmd.y2 - cmd.y1;
+        const len = Math.hypot(dx, dy);
+        if (len < 0.001) {
+            const r = cmd.size / 2;
+            const ring = [];
+            for (let i = 0; i <= 8; i++) {
+                const a = (i / 8) * Math.PI * 2;
+                ring.push({ x: cmd.x1 + r * Math.cos(a), y: cmd.y1 + r * Math.sin(a) });
+            }
+            return { regions: [ring], inverted: false };
+        }
+        const hw = cmd.size / 2;
+        const nx = -dy / len * hw, ny = dx / len * hw;
+        return { regions: [[
+            { x: cmd.x1 + nx, y: cmd.y1 + ny },
+            { x: cmd.x2 + nx, y: cmd.y2 + ny },
+            { x: cmd.x2 - nx, y: cmd.y2 - ny },
+            { x: cmd.x1 - nx, y: cmd.y1 - ny },
+            { x: cmd.x1 + nx, y: cmd.y1 + ny }
+        ]], inverted: false };
+    }
+
+    rectToPolygon(cmd) {
+        const x1 = Math.min(cmd.x1, cmd.x2), y1 = Math.min(cmd.y1, cmd.y2);
+        const x2 = Math.max(cmd.x1, cmd.x2), y2 = Math.max(cmd.y1, cmd.y2);
+        const hw = cmd.size / 2;
+        if (x2 - x1 <= hw * 2 || y2 - y1 <= hw * 2) {
+            return { regions: [[
+                { x: x1 - hw, y: y1 - hw }, { x: x2 + hw, y: y1 - hw },
+                { x: x2 + hw, y: y2 + hw }, { x: x1 - hw, y: y2 + hw },
+                { x: x1 - hw, y: y1 - hw }
+            ]], inverted: false };
+        }
+        return { regions: [
+            [{ x: x1 - hw, y: y1 - hw }, { x: x2 + hw, y: y1 - hw },
+             { x: x2 + hw, y: y2 + hw }, { x: x1 - hw, y: y2 + hw },
+             { x: x1 - hw, y: y1 - hw }],
+            [{ x: x1 + hw, y: y1 + hw }, { x: x1 + hw, y: y2 - hw },
+             { x: x2 - hw, y: y2 - hw }, { x: x2 - hw, y: y1 + hw },
+             { x: x1 + hw, y: y1 + hw }]
+        ], inverted: false };
+    }
+
+    circleToPolygon(cmd) {
+        const cx = (cmd.x1 + cmd.x2) / 2, cy = (cmd.y1 + cmd.y2) / 2;
+        const rx = Math.abs(cmd.x2 - cmd.x1) / 2, ry = Math.abs(cmd.y2 - cmd.y1) / 2;
+        const hw = cmd.size / 2;
+        const innerRx = rx - hw, innerRy = ry - hw;
+        const steps = 36;
+        if (innerRx <= 0 || innerRy <= 0) {
+            const ring = [];
+            for (let i = 0; i <= steps; i++) {
+                const a = (i / steps) * Math.PI * 2;
+                ring.push({ x: cx + (rx + hw) * Math.cos(a), y: cy + (ry + hw) * Math.sin(a) });
+            }
+            return { regions: [ring], inverted: false };
+        }
+        const outerRing = [], innerRing = [];
+        for (let i = 0; i <= steps; i++) {
+            const a = (i / steps) * Math.PI * 2;
+            outerRing.push({ x: cx + (rx + hw) * Math.cos(a), y: cy + (ry + hw) * Math.sin(a) });
+        }
+        for (let i = steps; i >= 0; i--) {
+            const a = (i / steps) * Math.PI * 2;
+            innerRing.push({ x: cx + innerRx * Math.cos(a), y: cy + innerRy * Math.sin(a) });
+        }
+        return { regions: [outerRing, innerRing], inverted: false };
+    }
+
+    imageToPolygon(cmd) {
+        return { regions: [[
+            { x: cmd.x, y: cmd.y }, { x: cmd.x + cmd.width, y: cmd.y },
+            { x: cmd.x + cmd.width, y: cmd.y + cmd.height }, { x: cmd.x, y: cmd.y + cmd.height },
+            { x: cmd.x, y: cmd.y }
+        ]], inverted: false };
+    }
+
+    pointInRing(x, y, ring) {
+        let inside = false;
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            const xi = ring[i].x, yi = ring[i].y;
+            const xj = ring[j].x, yj = ring[j].y;
+            if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+        }
+        return inside;
+    }
+
+    signedArea(ring) {
+        let area = 0;
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            area += (ring[j].x + ring[i].x) * (ring[j].y - ring[i].y);
+        }
+        return area / 2;
+    }
+
+    isClockwise(ring) { return this.signedArea(ring) < 0; }
+
+    groupRingsIntoRegions(rings) {
+        const valid = rings.filter(r => r.length >= 3);
+        if (valid.length === 0) return [];
+        const regions = [];
+        const assigned = new Array(valid.length).fill(false);
+        const ringData = valid.map(r => {
+            const closed = (r.length >= 2 && r[0].x === r[r.length-1].x && r[0].y === r[r.length-1].y)
+                ? r.slice(0, -1) : r;
+            return { ring: r, area: Math.abs(this.signedArea(closed)) };
+        }).sort((a, b) => b.area - a.area);
+
+        for (let i = 0; i < ringData.length; i++) {
+            if (assigned[i] || ringData[i].area < 1) continue;
+            assigned[i] = true;
+            if (ringData[i].ring.length < 3) continue;
+            const regionHoles = [];
+            for (let j = i + 1; j < ringData.length; j++) {
+                if (assigned[j]) continue;
+                if (ringData[j].ring.length < 3) continue;
+                if (this.ringContainsAnother(ringData[i].ring, ringData[j].ring)) {
+                    regionHoles.push(ringData[j].ring);
+                    assigned[j] = true;
+                }
+            }
+            regions.push({ outer: ringData[i].ring, holes: regionHoles });
+        }
+        for (let i = 0; i < ringData.length; i++) {
+            if (!assigned[i] && ringData[i].ring.length >= 3 && ringData[i].area >= 1) {
+                regions.push({ outer: ringData[i].ring, holes: [] });
+            }
+        }
+        return regions;
+    }
+
+    ringBbox(ring) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const p of ring) {
+            if (p.x < minX) minX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y > maxY) maxY = p.y;
+        }
+        return { minX, minY, maxX, maxY };
+    }
+
+    ringContainsAnother(outer, inner) {
+        if (!inner || inner.length < 3) return false;
+        let testPt = inner[0];
+        if (this.pointOnRing(testPt.x, testPt.y, outer)) {
+            for (let i = 1; i < inner.length; i++) {
+                if (!this.pointOnRing(inner[i].x, inner[i].y, outer)) {
+                    testPt = inner[i]; break;
+                }
+            }
+        }
+        return this.pointInRing(testPt.x, testPt.y, outer);
+    }
+
+    pointOnRing(x, y, ring) {
+        const tol = 0.5;
+        for (const p of ring) {
+            if (Math.abs(p.x - x) < tol && Math.abs(p.y - y) < tol) return true;
+        }
+        return false;
+    }
+
+    expandBoundary(contours, offset) {
+        const expandOne = (points, expandOffset) => {
+            if (points.length < 3) return points;
+            const closed = points[points.length - 1].x === points[0].x && points[points.length - 1].y === points[0].y;
+            const n = closed ? points.length - 1 : points.length;
+            let cx = 0, cy = 0;
+            for (let i = 0; i < n; i++) { cx += points[i].x; cy += points[i].y; }
+            cx /= n;
+            cy /= n;
+            let maxDist = 0;
+            for (let i = 0; i < n; i++) {
+                const d = (points[i].x - cx) ** 2 + (points[i].y - cy) ** 2;
+                if (d > maxDist) maxDist = d;
+            }
+            maxDist = Math.sqrt(maxDist) || 1;
+            const scale = Math.max(0.1, (maxDist + expandOffset) / maxDist);
+            const expanded = [];
+            for (let i = 0; i < n; i++) {
+                expanded.push({ x: cx + (points[i].x - cx) * scale, y: cy + (points[i].y - cy) * scale });
+            }
+            expanded.push({ ...expanded[0] });
+            return expanded;
+        };
+
+        const result = { outer: [], holes: [] };
+        if (contours.outer && contours.outer.length >= 3) {
+            result.outer = expandOne(contours.outer, offset);
+        }
+        if (contours.holes) {
+            result.holes = contours.holes.map(h => expandOne(h, -offset)).filter(h => h.length >= 3);
+        }
+        return result;
     }
 
     hexToRgb(hex) {
@@ -2581,21 +3006,36 @@ class DrawingApp {
                                     d += ` L ${curr.x.toFixed(2)} ${curr.y.toFixed(2)}`;
                                 }
                             }
+                            if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= Math.max(cmd.size * 3 + 5, 25)) d += ' Z';
                             svgParts.push(`    <path d="${d}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="${cmd.opacity}"/>`);
                         }
                     } else if (cmd.type === 'fill') {
-                        let d = `M ${cmd.points[0].x.toFixed(2)} ${cmd.points[0].y.toFixed(2)}`;
-                        for (let i = 1; i < cmd.points.length; i++) {
-                            const prev = cmd.points[i - 1];
-                            const curr = cmd.points[i];
-                            if (prev.cp2x !== undefined && curr.cp1x !== undefined) {
-                                d += ` C ${prev.cp2x.toFixed(2)} ${prev.cp2y.toFixed(2)} ${curr.cp1x.toFixed(2)} ${curr.cp1y.toFixed(2)} ${curr.x.toFixed(2)} ${curr.y.toFixed(2)}`;
-                            } else {
-                                d += ` L ${curr.x.toFixed(2)} ${curr.y.toFixed(2)}`;
+                        const pts = cmd.points;
+                        const contourToD = (contour) => {
+                            if (!contour || contour.length === 0) return '';
+                            let d = `M ${contour[0].x.toFixed(2)} ${contour[0].y.toFixed(2)}`;
+                            for (let i = 1; i < contour.length; i++) {
+                                const prev = contour[i - 1];
+                                const curr = contour[i];
+                                if (prev.cp2x !== undefined && curr.cp1x !== undefined) {
+                                    d += ` C ${prev.cp2x.toFixed(2)} ${prev.cp2y.toFixed(2)} ${curr.cp1x.toFixed(2)} ${curr.cp1y.toFixed(2)} ${curr.x.toFixed(2)} ${curr.y.toFixed(2)}`;
+                                } else {
+                                    d += ` L ${curr.x.toFixed(2)} ${curr.y.toFixed(2)}`;
+                                }
+                            }
+                            d += ' Z';
+                            return d;
+                        };
+                        let d;
+                        if (Array.isArray(pts)) {
+                            d = contourToD(pts);
+                        } else {
+                            d = contourToD(pts.outer);
+                            if (pts.holes) {
+                                for (const hole of pts.holes) d += ' ' + contourToD(hole);
                             }
                         }
-                        d += ' Z';
-                        svgParts.push(`    <path d="${d}" fill="${cmd.color}" stroke="none" opacity="${cmd.opacity}"/>`);
+                        svgParts.push(`    <path d="${d}" fill="${cmd.color}" stroke="none" opacity="${cmd.opacity}" fill-rule="evenodd"/>`);
                     } else if (cmd.type === 'line') {
                         svgParts.push(`    <line x1="${cmd.x1.toFixed(2)}" y1="${cmd.y1.toFixed(2)}" x2="${cmd.x2.toFixed(2)}" y2="${cmd.y2.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="round" opacity="${cmd.opacity}"/>`);
                     } else if (cmd.type === 'rect') {
@@ -2627,13 +3067,29 @@ class DrawingApp {
         const svgContent = svgParts.join('\n');
         const blob = new Blob([svgContent], { type: 'image/svg+xml' });
 
-        if (this.openedFileHandle) {
-            const fileName = this.openedFileName;
-            this.openedFileHandle.createWritable().then(writable => {
+        const doSave = (handle) => {
+            const fileName = handle.name;
+            handle.createWritable().then(writable => {
                 writable.write(blob).then(() => writable.close());
             }).then(() => {
                 alert(`File ${fileName} berhasil disimpan.`);
             });
+        };
+
+        if (this.openedFileHandle) {
+            doSave(this.openedFileHandle);
+            return;
+        }
+
+        if ('showSaveFilePicker' in window) {
+            window.showSaveFilePicker({
+                types: [{ accept: { 'image/svg+xml': ['.svg'] } }],
+                suggestedName: this.openedFileName || 'drawing.svg'
+            }).then(handle => {
+                this.openedFileHandle = handle;
+                this.openedFileName = handle.name;
+                doSave(handle);
+            }).catch(() => {});
             return;
         }
 
@@ -2753,12 +3209,14 @@ class DrawingApp {
             vbH = svgHeight;
         }
 
-        const contentBBox = this.computeSVGBBox(svg);
-        if (contentBBox) {
-            vbX = contentBBox.x;
-            vbY = contentBBox.y;
-            vbW = contentBBox.w || 1;
-            vbH = contentBBox.h || 1;
+        if (!viewBox) {
+            const contentBBox = this.computeSVGBBox(svg);
+            if (contentBBox) {
+                vbX = contentBBox.x;
+                vbY = contentBBox.y;
+                vbW = contentBBox.w || 1;
+                vbH = contentBBox.h || 1;
+            }
         }
 
         const scaleX = this.canvasWidth / vbW;
@@ -3636,11 +4094,11 @@ class DrawingApp {
         layer.vectorCommands.forEach((cmd, i) => {
             if (this.selectedIndices.includes(i)) {
                 if (cmd.type === 'brush' || cmd.type === 'fill') {
-                    for (const p of cmd.points) {
+                    this.forEachFillPoint(cmd.points, p => {
                         p.x += offset;
                         if (p.cp1x !== undefined) p.cp1x += offset;
                         if (p.cp2x !== undefined) p.cp2x += offset;
-                    }
+                    });
                 } else if (cmd.type === 'image') {
                     cmd.x += offset;
                 } else {
@@ -3663,11 +4121,11 @@ class DrawingApp {
         layer.vectorCommands.forEach((cmd, i) => {
             if (this.selectedIndices.includes(i)) {
                 if (cmd.type === 'brush' || cmd.type === 'fill') {
-                    for (const p of cmd.points) {
+                    this.forEachFillPoint(cmd.points, p => {
                         p.y += offset;
                         if (p.cp1y !== undefined) p.cp1y += offset;
                         if (p.cp2y !== undefined) p.cp2y += offset;
-                    }
+                    });
                 } else if (cmd.type === 'image') {
                     cmd.y += offset;
                 } else {
@@ -3892,17 +4350,21 @@ class DrawingApp {
         if (this.selectedIndices.length === 0) return;
 
         const activeLayer = this.layers[this.activeLayerIndex];
-        const hasBrush = this.selectedIndices.some(idx => activeLayer.vectorCommands[idx].type === 'brush');
+        const hasEditable = this.selectedIndices.some(idx => ['brush', 'fill'].includes(activeLayer.vectorCommands[idx].type));
 
-        if (!hasBrush) return;
+        if (!hasEditable) return;
 
         this.pathEditMode = !this.pathEditMode;
         document.getElementById('pathEditBtn').classList.toggle('active', this.pathEditMode);
 
         if (this.pathEditMode) {
-            const firstBrush = this.selectedIndices.find(idx => activeLayer.vectorCommands[idx].type === 'brush');
-            this.editingPathCmd = activeLayer.vectorCommands[firstBrush];
-            this.editingPathIndex = firstBrush;
+            const firstCmd = this.selectedIndices.find(idx => ['brush', 'fill'].includes(activeLayer.vectorCommands[idx].type));
+            this.editingPathCmd = activeLayer.vectorCommands[firstCmd];
+            this.editingPathIndex = firstCmd;
+            if (this.editingPathCmd.type === 'fill' && !Array.isArray(this.editingPathCmd.points)) {
+                this._savedFillHoles = this.editingPathCmd.points.holes || [];
+                this.editingPathCmd.points = this.editingPathCmd.points.outer;
+            }
             document.getElementById('deleteSelectedBtn').style.display = 'none';
             const layerBtns = ['addLayerBtn', 'deleteLayerBtn', 'moveUpLayerBtn', 'moveDownLayerBtn', 'mergeDownBtn', 'renameLayerBtn', 'clearLayerBtn'];
             layerBtns.forEach(id => {
@@ -3910,6 +4372,7 @@ class DrawingApp {
                 document.getElementById(id).style.opacity = '0.3';
             });
             document.getElementById('toolBrush').style.display = 'none';
+            document.getElementById('toolPen').style.display = 'none';
             document.getElementById('toolLine').style.display = 'none';
             document.getElementById('toolRect').style.display = 'none';
             document.getElementById('toolCircle').style.display = 'none';
@@ -3935,6 +4398,7 @@ class DrawingApp {
                 document.getElementById(id).style.opacity = '1';
             });
             document.getElementById('toolBrush').style.display = 'flex';
+            document.getElementById('toolPen').style.display = 'flex';
             document.getElementById('toolLine').style.display = 'flex';
             document.getElementById('toolRect').style.display = 'flex';
             document.getElementById('toolCircle').style.display = 'flex';
@@ -3944,7 +4408,9 @@ class DrawingApp {
             this.updateSelectionBBox();
         }
 
-        document.getElementById('pathEditControls').style.display = this.pathEditMode ? 'flex' : 'none';
+        document.getElementById('pointTypeSelect').disabled = !this.pathEditMode;
+        document.getElementById('addPointBtn').disabled = !this.pathEditMode;
+        document.getElementById('deletePointBtn').disabled = !this.pathEditMode;
         this.viewportRender();
     }
 
@@ -3983,6 +4449,10 @@ class DrawingApp {
     }
 
     exitPathEditMode() {
+        if (this.editingPathCmd && this.editingPathCmd.type === 'fill' && this._savedFillHoles) {
+            this.editingPathCmd.points = { outer: this.editingPathCmd.points, holes: this._savedFillHoles };
+            this._savedFillHoles = null;
+        }
         this.pathEditMode = false;
         this.editingPathCmd = null;
         this.editingPathIndex = -1;
@@ -4023,6 +4493,8 @@ class DrawingApp {
         const pointLineWidth = (2.5 + 2.5 * t) / (baseScale * z);
         const dashLen = (4 + 4 * t) / (baseScale * z);
 
+        const isClosed = this.editingPathCmd.type === 'fill';
+
         for (let i = 0; i < points.length; i++) {
             const p = points[i];
 
@@ -4038,6 +4510,22 @@ class DrawingApp {
                     ctx.moveTo(next.cp1x, next.cp1y);
                 }
                 ctx.lineTo(next.x, next.y);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            if (isClosed && i === points.length - 1) {
+                const first = points[0];
+                ctx.strokeStyle = '#4a9eff';
+                ctx.lineWidth = pathLineWidth;
+                ctx.setLineDash([dashLen, dashLen]);
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y);
+                if (p.cp2x !== undefined && first.cp1x !== undefined) {
+                    ctx.lineTo(p.cp2x, p.cp2y);
+                    ctx.moveTo(first.cp1x, first.cp1y);
+                }
+                ctx.lineTo(first.x, first.y);
                 ctx.stroke();
                 ctx.setLineDash([]);
             }
