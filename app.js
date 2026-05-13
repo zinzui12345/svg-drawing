@@ -536,7 +536,7 @@ class DrawingApp {
         vpCtx.fillStyle = '#ffffff';
         vpCtx.fillRect(0, 0, this.canvasWidth, this.canvasHeight);
 
-        const dimOther = this.currentTool === 'select';
+        const dimOther = this.currentTool === 'select' || this.currentTool === 'fill';
 
         for (let i = this.layers.length - 1; i >= 0; i--) {
             const layer = this.layers[i];
@@ -1392,7 +1392,7 @@ class DrawingApp {
         const scaleY = h / this.canvasHeight;
         ctx.scale(scaleX, scaleY);
 
-        const dimOther = this.currentTool === 'select';
+        const dimOther = this.currentTool === 'select' || this.currentTool === 'fill';
 
         for (let i = this.layers.length - 1; i >= 0; i--) {
             const layer = this.layers[i];
