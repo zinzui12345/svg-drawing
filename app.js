@@ -2035,23 +2035,41 @@ class DrawingApp {
         return inner;
     }
 
-    performFloodFill(x, y) {
+    async performFloodFill(x, y) {
         console.log('performFloodFill', x, y);
         if (x < 0 || x >= this.canvasWidth || y < 0 || y >= this.canvasHeight) return;
+        const prevCursor = this.viewportCanvas.style.cursor;
+        this.viewportCanvas.style.cursor = 'wait';
+        await new Promise(r => setTimeout(r, 100));
+        try {
 
         const activeLayer = this.layers[this.activeLayerIndex];
         const commands = activeLayer.vectorCommands || [];
 
-        const interiors = [];
-        for (const cmd of commands) {
-            if (cmd.type !== 'brush') continue;
-            const interior = this.brushToLoopInterior(cmd);
-            if (interior) interiors.push(interior);
+        // Union all command obstacles (skip existing fills)
+        let inkUnion = null;
+        for (let ci = 0; ci < commands.length; ci++) {
+            const cmd = commands[ci];
+            if (cmd.type === 'fill') continue;
+            const polys = this.cmdToPolygons(cmd);
+            if (!polys || !polys.regions || polys.regions.length === 0) continue;
+            if (polys.regions.some(r => r.length < 3)) continue;
+            console.log('cmd', ci, 'type', cmd.type, 'regions', polys.regions.length, 'bbox', (function(r) {
+                let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+                for (const p of r) { if(p.x<minX)minX=p.x; if(p.y<minY)minY=p.y; if(p.x>maxX)maxX=p.x; if(p.y>maxY)maxY=p.y; }
+                return {minX,minY,maxX,maxY};
+            })(polys.regions[0]));
+            if (inkUnion === null) inkUnion = polys;
+            else { try {
+                const before = inkUnion.regions.length;
+                inkUnion = this._pbUnion(inkUnion, polys);
+                console.log('union result: before=' + before + ' + ' + polys.regions.length + ' = ' + inkUnion.regions.length + ' regions');
+            } catch (e) { console.warn('union failed:', e); } }
         }
 
-        if (interiors.length === 0) {
+        if (!inkUnion || !inkUnion.regions || inkUnion.regions.length === 0) {
             this.saveState();
-            commands.push({
+            commands.unshift({
                 type: 'fill', color: this.brushColor, opacity: this.brushOpacity,
                 points: [
                     { x: 0, y: 0 }, { x: this.canvasWidth, y: 0 },
@@ -2063,65 +2081,77 @@ class DrawingApp {
             return;
         }
 
-        interiors.sort((a, b) => Math.abs(this.signedArea(a)) - Math.abs(this.signedArea(b)));
+        // Log union result for debugging
+        console.log('union final:', inkUnion.regions.length, 'regions, areas:', inkUnion.regions.map(r => this.signedArea(r).toFixed(2)).join(', '));
+        inkUnion.regions.forEach((r, i) => {
+            const b = this.ringBbox(r);
+            console.log('  region', i, 'area', this.signedArea(r).toFixed(2), 'bbox', b);
+        });
+        const inkRegions = inkUnion.regions.filter(r => r.length >= 3 && this.signedArea(r) > 0);
+        console.log('inkRegions=' + inkRegions.length);
 
-        let containingRing = null;
-        for (const ring of interiors) {
-            if (this.pointInRing(x, y, ring)) {
-                containingRing = ring;
-                break;
-            }
-        }
-
-        if (!containingRing) {
-            this.saveState();
-            commands.push({
-                type: 'fill', color: this.brushColor, opacity: this.brushOpacity,
-                points: [
-                    { x: 0, y: 0 }, { x: this.canvasWidth, y: 0 },
-                    { x: this.canvasWidth, y: this.canvasHeight }, { x: 0, y: this.canvasHeight },
-                    { x: 0, y: 0 }
-                ]
-            });
-            this.viewportRender();
-            return;
-        }
-
-        const containingArea = Math.abs(this.signedArea(containingRing));
-        const holes = [];
-        for (const ring of interiors) {
-            if (ring === containingRing) continue;
-            const childArea = Math.abs(this.signedArea(ring));
-            if (childArea >= containingArea) continue;
-            if (!this.ringContainsAnother(containingRing, ring)) continue;
-
-            let isDirect = true;
-            for (const other of interiors) {
-                if (other === containingRing || other === ring) continue;
-                const otherArea = Math.abs(this.signedArea(other));
-                if (otherArea >= childArea) continue;
-                if (this.ringContainsAnother(other, ring) && this.ringContainsAnother(containingRing, other)) {
-                    isDirect = false;
-                    break;
+        // Use _pbDifference to find the empty-space region containing the click point
+        // This is more reliable than extracting holes from the union
+        const bboxPoly = {
+            regions: [[
+                { x: 0, y: 0 }, { x: this.canvasWidth, y: 0 },
+                { x: this.canvasWidth, y: this.canvasHeight }, { x: 0, y: this.canvasHeight },
+                { x: 0, y: 0 }
+            ]],
+            inverted: false
+        };
+        // Only subtract CCW ink regions (CW holes from union represent empty space, not ink)
+        const inkOnly = { regions: inkRegions, inverted: false };
+        const empty = this._pbDifference(bboxPoly, inkOnly);
+        const emptyRegions = empty.regions.filter(r => r.length >= 3 && this.signedArea(r) > 0);
+        console.log('emptyRegions from difference:', emptyRegions.length,
+            emptyRegions.map(r => this.signedArea(r).toFixed(0)).join(', '));
+        const containingRegion = emptyRegions.find(r => this.pointInRing(x, y, r));
+        if (containingRegion) {
+            // Find ink regions fully inside the fill area → add as holes so fill doesn't cover them
+            const containingArea = Math.abs(this.signedArea(containingRegion));
+            const childInk = inkRegions.filter(r => {
+                const area = Math.abs(this.signedArea(r));
+                if (area >= containingArea) return false;
+                if (!this.ringContainsAnother(containingRegion, r)) return false;
+                for (const other of inkRegions) {
+                    if (other === r) continue;
+                    if (Math.abs(this.signedArea(other)) >= area) continue;
+                    if (this.ringContainsAnother(other, r) && this.ringContainsAnother(containingRegion, other)) return false;
                 }
+                return true;
+            });
+            console.log('childInk:', childInk.length);
+            const fillRegion = { outer: containingRegion, holes: childInk };
+            if (this.expandOffset !== 0) {
+                Object.assign(fillRegion, this.expandBoundary(fillRegion, this.expandOffset));
             }
-            if (isDirect) holes.push(ring);
+            this.saveState();
+            commands.unshift({
+                type: 'fill', color: this.brushColor, opacity: this.brushOpacity,
+                points: fillRegion
+            });
+            this.viewportRender();
+            return;
         }
 
-        const fillRegion = { outer: containingRing, holes };
-
+        // Last resort: fill entire canvas minus ink (for point outside all obstacles)
+        const bbox = [
+            { x: 0, y: 0 }, { x: this.canvasWidth, y: 0 },
+            { x: this.canvasWidth, y: this.canvasHeight }, { x: 0, y: this.canvasHeight },
+            { x: 0, y: 0 }
+        ];
+        const fillRegion = { outer: bbox, holes: inkRegions };
         if (this.expandOffset !== 0) {
             Object.assign(fillRegion, this.expandBoundary(fillRegion, this.expandOffset));
         }
-
         this.saveState();
-        const insertIndex = this.findFillInsertIndex(commands, fillRegion);
-        commands.splice(insertIndex, 0, {
+        commands.unshift({
             type: 'fill', color: this.brushColor, opacity: this.brushOpacity,
             points: fillRegion
         });
         this.viewportRender();
-    }
+    } finally { this.viewportCanvas.style.cursor = prevCursor; } }
 
     findFillInsertIndex(commands, contours) {
         const outerPoints = contours.outer || contours;
@@ -2237,6 +2267,13 @@ class DrawingApp {
             console.log('brushToPolygon: closed, flat now', flat.length, 'points');
         }
         const hw = cmd.size / 2;
+        if (!closed) {
+            const outline = this.strokeToOutline(flat, hw, false);
+            if (outline && outline.length >= 4) {
+                console.log('brushToPolygon: using strokeToOutline');
+                return { regions: [outline], inverted: false };
+            }
+        }
         const obstacle = this.brushToPolygonObstacle(flat, hw);
         console.log('brushToPolygon: obstacle regions=' + (obstacle ? obstacle.regions.length : 'null'));
         if (!obstacle || !obstacle.regions || obstacle.regions.length === 0) {
@@ -4381,31 +4418,7 @@ class DrawingApp {
             if (expandGroup) expandGroup.style.display = 'none';
             this.updatePointTypeSelect();
         } else {
-            this.editingPathCmd = null;
-            this.editingPathIndex = -1;
-            this.selectedPointIndex = -1;
-            this.addPointMode = false;
-            this.isDraggingPoint = false;
-            this.draggedHandle = null;
-            this.lastPathPoint = null;
-            this.hoveredPointIndex = -1;
-            this.hoveredSegmentIndex = -1;
-            this.hoveredHandle = null;
-            this.updateDeleteButton();
-            const layerBtns = ['addLayerBtn', 'deleteLayerBtn', 'moveUpLayerBtn', 'moveDownLayerBtn', 'mergeDownBtn', 'renameLayerBtn', 'clearLayerBtn'];
-            layerBtns.forEach(id => {
-                document.getElementById(id).disabled = false;
-                document.getElementById(id).style.opacity = '1';
-            });
-            document.getElementById('toolBrush').style.display = 'flex';
-            document.getElementById('toolPen').style.display = 'flex';
-            document.getElementById('toolLine').style.display = 'flex';
-            document.getElementById('toolRect').style.display = 'flex';
-            document.getElementById('toolCircle').style.display = 'flex';
-            document.getElementById('toolFill').style.display = 'flex';
-            const expandGroup = document.getElementById('expandToolGroup');
-            if (expandGroup) expandGroup.style.display = this.currentTool === 'fill' ? 'flex' : 'none';
-            this.updateSelectionBBox();
+            this.exitPathEditMode();
         }
 
         document.getElementById('pointTypeSelect').disabled = !this.pathEditMode;
@@ -4466,6 +4479,19 @@ class DrawingApp {
         this.hoveredHandle = null;
         document.getElementById('pathEditBtn').classList.remove('active');
         document.getElementById('addPointBtn').classList.remove('active');
+        const layerBtns = ['addLayerBtn', 'deleteLayerBtn', 'moveUpLayerBtn', 'moveDownLayerBtn', 'mergeDownBtn', 'renameLayerBtn', 'clearLayerBtn'];
+        layerBtns.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) { el.disabled = false; el.style.opacity = '1'; }
+        });
+        document.getElementById('toolBrush').style.display = 'flex';
+        document.getElementById('toolPen').style.display = 'flex';
+        document.getElementById('toolLine').style.display = 'flex';
+        document.getElementById('toolRect').style.display = 'flex';
+        document.getElementById('toolCircle').style.display = 'flex';
+        document.getElementById('toolFill').style.display = 'flex';
+        const expandGroup = document.getElementById('expandToolGroup');
+        if (expandGroup) expandGroup.style.display = this.currentTool === 'fill' ? 'flex' : 'none';
         this.updateDeleteButton();
         this.updatePointTypeSelect();
         this.updateSelectionBBox();
