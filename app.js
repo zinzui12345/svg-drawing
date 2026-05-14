@@ -439,6 +439,8 @@ class DrawingApp {
         });
         document.getElementById('deleteSelectedBtn').addEventListener('click', () => this.deleteSelected());
         document.getElementById('convertBtn').addEventListener('click', () => this.convertSelected());
+        document.getElementById('moveBackBtn').addEventListener('click', () => this.moveSelectedBackward());
+        document.getElementById('moveForwardBtn').addEventListener('click', () => this.moveSelectedForward());
 
         document.getElementById('moveToLayerSelect').addEventListener('change', (e) => {
             const targetIndex = parseInt(e.target.value);
@@ -1469,10 +1471,14 @@ class DrawingApp {
         const centerHBtn = document.getElementById('centerHorizontalBtn');
         const centerVBtn = document.getElementById('centerVerticalBtn');
         const convertBtn = document.getElementById('convertBtn');
+        const moveBackBtn = document.getElementById('moveBackBtn');
+        const moveForwardBtn = document.getElementById('moveForwardBtn');
         const visible = this.selectedIndices.length > 0;
 
         if (deleteBtn) deleteBtn.style.display = visible ? 'flex' : 'none';
         if (convertBtn) convertBtn.style.display = visible ? 'flex' : 'none';
+        if (moveBackBtn) moveBackBtn.style.display = visible ? 'flex' : 'none';
+        if (moveForwardBtn) moveForwardBtn.style.display = visible ? 'flex' : 'none';
         if (moveSelect) moveSelect.style.display = visible ? 'inline-block' : 'none';
         if (centerHBtn) centerHBtn.style.display = visible ? 'flex' : 'none';
         if (centerVBtn) centerVBtn.style.display = visible ? 'flex' : 'none';
@@ -4178,6 +4184,42 @@ class DrawingApp {
         this.viewportRender();
     }
 
+    moveSelectedBackward() {
+        if (this.selectedIndices.length === 0) return;
+        this.saveState();
+        const cmds = this.layers[this.activeLayerIndex].vectorCommands;
+        const sorted = [...this.selectedIndices].sort((a, b) => a - b);
+        if (sorted[0] === 0) return;
+        for (const idx of sorted) {
+            const tmp = cmds[idx - 1];
+            cmds[idx - 1] = cmds[idx];
+            cmds[idx] = tmp;
+        }
+        this.selectedIndices = sorted.map(i => i - 1);
+        this.selectedCommands = this.selectedIndices.map(i => cmds[i]);
+        this.updateSelectionBBox();
+        this.updateDeleteButton();
+        this.viewportRender();
+    }
+
+    moveSelectedForward() {
+        if (this.selectedIndices.length === 0) return;
+        this.saveState();
+        const cmds = this.layers[this.activeLayerIndex].vectorCommands;
+        const sorted = [...this.selectedIndices].sort((a, b) => b - a);
+        if (sorted[0] === cmds.length - 1) return;
+        for (const idx of sorted) {
+            const tmp = cmds[idx + 1];
+            cmds[idx + 1] = cmds[idx];
+            cmds[idx] = tmp;
+        }
+        this.selectedIndices = sorted.map(i => i + 1);
+        this.selectedCommands = this.selectedIndices.map(i => cmds[i]);
+        this.updateSelectionBBox();
+        this.updateDeleteButton();
+        this.viewportRender();
+    }
+
     moveSelectedToLayer(targetIndex) {
         if (this.selectedIndices.length === 0 || targetIndex === this.activeLayerIndex) return;
         this.saveState();
@@ -4435,6 +4477,17 @@ class DrawingApp {
             return;
         }
 
+        if (e.key === 'PageUp') {
+            e.preventDefault();
+            if (this.selectedIndices.length > 0) this.moveSelectedForward();
+            return;
+        }
+        if (e.key === 'PageDown') {
+            e.preventDefault();
+            if (this.selectedIndices.length > 0) this.moveSelectedBackward();
+            return;
+        }
+
         switch (e.key.toLowerCase()) {
             case 'e':
                 if (this.selectedIndices.length > 0) {
@@ -4487,6 +4540,8 @@ class DrawingApp {
             }
             document.getElementById('deleteSelectedBtn').style.display = 'none';
             document.getElementById('convertBtn').style.display = 'none';
+            document.getElementById('moveBackBtn').style.display = 'none';
+            document.getElementById('moveForwardBtn').style.display = 'none';
             const layerBtns = ['addLayerBtn', 'deleteLayerBtn', 'moveUpLayerBtn', 'moveDownLayerBtn', 'mergeDownBtn', 'renameLayerBtn', 'clearLayerBtn'];
             layerBtns.forEach(id => {
                 document.getElementById(id).disabled = true;
