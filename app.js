@@ -438,6 +438,7 @@ class DrawingApp {
             this.viewportRender();
         });
         document.getElementById('deleteSelectedBtn').addEventListener('click', () => this.deleteSelected());
+        document.getElementById('convertBtn').addEventListener('click', () => this.convertSelected());
 
         document.getElementById('moveToLayerSelect').addEventListener('change', (e) => {
             const targetIndex = parseInt(e.target.value);
@@ -1467,9 +1468,11 @@ class DrawingApp {
         const moveSelect = document.getElementById('moveToLayerSelect');
         const centerHBtn = document.getElementById('centerHorizontalBtn');
         const centerVBtn = document.getElementById('centerVerticalBtn');
+        const convertBtn = document.getElementById('convertBtn');
         const visible = this.selectedIndices.length > 0;
 
         if (deleteBtn) deleteBtn.style.display = visible ? 'flex' : 'none';
+        if (convertBtn) convertBtn.style.display = visible ? 'flex' : 'none';
         if (moveSelect) moveSelect.style.display = visible ? 'inline-block' : 'none';
         if (centerHBtn) centerHBtn.style.display = visible ? 'flex' : 'none';
         if (centerVBtn) centerVBtn.style.display = visible ? 'flex' : 'none';
@@ -1917,7 +1920,7 @@ class DrawingApp {
                         ctx.lineTo(curr.x, curr.y);
                     }
                 }
-                if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= Math.max(cmd.size * 3 + 5, 25)) ctx.closePath();
+                if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= cmd.size) ctx.closePath();
                 ctx.stroke();
             }
         } else if (cmd.type === 'fill') {
@@ -1988,7 +1991,7 @@ class DrawingApp {
         if (flat.length < 3) return null;
 
         const closed = cmd.closed || (flat.length > 2 &&
-            Math.hypot(flat[0].x - flat[flat.length - 1].x, flat[0].y - flat[flat.length - 1].y) <= Math.max(cmd.size * 3 + 5, 25));
+            Math.hypot(flat[0].x - flat[flat.length - 1].x, flat[0].y - flat[flat.length - 1].y) <= cmd.size);
 
         if (!closed) return null;
 
@@ -2045,6 +2048,46 @@ class DrawingApp {
 
         const activeLayer = this.layers[this.activeLayerIndex];
         const commands = activeLayer.vectorCommands || [];
+
+        // Fast path: find a closed brush stroke containing the click, with no other objects inside it
+        for (const cmd of commands) {
+            if (cmd.type !== 'brush') continue;
+            const flat = this.sampleStroke(cmd.points);
+            if (flat.length < 3) continue;
+            const closed = cmd.closed || Math.hypot(flat[0].x - flat[flat.length-1].x, flat[0].y - flat[flat.length-1].y) <= cmd.size;
+            if (!closed || !this.pointInRing(x, y, flat)) continue;
+            // Check no other non-fill object is inside this brush stroke
+            let hasInner = false;
+            for (const other of commands) {
+                if (other === cmd || other.type === 'fill') continue;
+                const otherFlat = other.type === 'brush' ? this.sampleStroke(other.points) : null;
+                if (otherFlat && otherFlat.length >= 2 && this.pointInRing(otherFlat[Math.floor(otherFlat.length / 2)].x, otherFlat[Math.floor(otherFlat.length / 2)].y, flat)) {
+                    hasInner = true; break;
+                }
+                // For non-brush, check center of bounding box
+                if (other.type === 'line' || other.type === 'rect' || other.type === 'circle') {
+                    const cx = other.x1 !== undefined ? (other.x1 + (other.x2 || other.x1)) / 2 : other.x || 0;
+                    const cy = other.y1 !== undefined ? (other.y1 + (other.y2 || other.y1)) / 2 : other.y || 0;
+                    if (this.pointInRing(cx, cy, flat)) { hasInner = true; break; }
+                }
+            }
+            if (hasInner) break;
+            // Fast path: duplicate brush stroke as fill
+            let fillPts;
+            if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length-1].x, cmd.points[0].y - cmd.points[cmd.points.length-1].y) <= cmd.size) {
+                fillPts = cmd.points.map(p => ({ ...p }));
+            } else {
+                fillPts = cmd.points.map(p => ({ ...p }));
+                fillPts.push({ x: cmd.points[0].x, y: cmd.points[0].y });
+            }
+            this.saveState();
+            commands.unshift({
+                type: 'fill', color: this.brushColor, opacity: this.brushOpacity,
+                points: { outer: fillPts, holes: [] }
+            });
+            this.viewportRender();
+            return;
+        }
 
         // Union all command obstacles (skip existing fills)
         let inkUnion = null;
@@ -2260,7 +2303,7 @@ class DrawingApp {
         const flat = this.sampleStroke(pts);
         if (flat.length < 2) { console.log('brushToPolygon: flat too short'); return null; }
         const closed = cmd.closed || (flat.length > 2 &&
-            Math.hypot(flat[0].x - flat[flat.length - 1].x, flat[0].y - flat[flat.length - 1].y) <= Math.max(cmd.size * 3 + 5, 25));
+            Math.hypot(flat[0].x - flat[flat.length - 1].x, flat[0].y - flat[flat.length - 1].y) <= cmd.size);
         if (closed && flat.length > 2 &&
             (flat[0].x !== flat[flat.length - 1].x || flat[0].y !== flat[flat.length - 1].y)) {
             flat.push({ x: flat[0].x, y: flat[0].y });
@@ -3043,7 +3086,7 @@ class DrawingApp {
                                     d += ` L ${curr.x.toFixed(2)} ${curr.y.toFixed(2)}`;
                                 }
                             }
-                            if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= Math.max(cmd.size * 3 + 5, 25)) d += ' Z';
+                            if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= cmd.size) d += ' Z';
                             svgParts.push(`    <path d="${d}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="${cmd.opacity}"/>`);
                         }
                     } else if (cmd.type === 'fill') {
@@ -4095,6 +4138,46 @@ class DrawingApp {
         this.viewportRender();
     }
 
+    convertSelected() {
+        if (this.selectedIndices.length === 0) return;
+        this.saveState();
+        const activeLayer = this.layers[this.activeLayerIndex];
+        const cmds = activeLayer.vectorCommands;
+        for (const idx of this.selectedIndices) {
+            const cmd = cmds[idx];
+            if (cmd.type === 'brush') {
+                const pts = cmd.points.map(p => ({ ...p }));
+                if (pts.length >= 2) {
+                    const last = pts[pts.length - 1];
+                    const first = pts[0];
+                    if (Math.hypot(first.x - last.x, first.y - last.y) > 1) {
+                        pts.push({ x: first.x, y: first.y,
+                            cp1x: last.cp2x !== undefined ? last.cp2x : undefined,
+                            cp1y: last.cp2y !== undefined ? last.cp2y : undefined });
+                    }
+                }
+                cmds[idx] = {
+                    type: 'fill', color: cmd.color, opacity: cmd.opacity,
+                    points: { outer: pts, holes: [] }
+                };
+            } else if (cmd.type === 'fill') {
+                const pts = cmd.points;
+                const outer = Array.isArray(pts) ? pts : (pts.outer || []);
+                if (outer.length < 2) continue;
+                cmds[idx] = {
+                    type: 'brush', color: cmd.color, opacity: cmd.opacity,
+                    size: this.brushSize || 3,
+                    points: outer.map(p => ({ ...p })),
+                    closed: true
+                };
+            }
+        }
+        this.selectedCommands = this.selectedIndices.map(i => cmds[i]);
+        this.updateSelectionBBox();
+        this.updateDeleteButton();
+        this.viewportRender();
+    }
+
     moveSelectedToLayer(targetIndex) {
         if (this.selectedIndices.length === 0 || targetIndex === this.activeLayerIndex) return;
         this.saveState();
@@ -4403,6 +4486,7 @@ class DrawingApp {
                 this.editingPathCmd.points = this.editingPathCmd.points.outer;
             }
             document.getElementById('deleteSelectedBtn').style.display = 'none';
+            document.getElementById('convertBtn').style.display = 'none';
             const layerBtns = ['addLayerBtn', 'deleteLayerBtn', 'moveUpLayerBtn', 'moveDownLayerBtn', 'mergeDownBtn', 'renameLayerBtn', 'clearLayerBtn'];
             layerBtns.forEach(id => {
                 document.getElementById(id).disabled = true;
