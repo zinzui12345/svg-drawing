@@ -441,6 +441,7 @@ class DrawingApp {
         document.getElementById('convertBtn').addEventListener('click', () => this.convertSelected());
         document.getElementById('moveBackBtn').addEventListener('click', () => this.moveSelectedBackward());
         document.getElementById('moveForwardBtn').addEventListener('click', () => this.moveSelectedForward());
+        document.getElementById('duplicateBtn').addEventListener('click', () => this.duplicateSelected());
 
         document.getElementById('moveToLayerSelect').addEventListener('change', (e) => {
             const targetIndex = parseInt(e.target.value);
@@ -1473,10 +1474,12 @@ class DrawingApp {
         const convertBtn = document.getElementById('convertBtn');
         const moveBackBtn = document.getElementById('moveBackBtn');
         const moveForwardBtn = document.getElementById('moveForwardBtn');
+        const duplicateBtn = document.getElementById('duplicateBtn');
         const visible = this.selectedIndices.length > 0;
 
         if (deleteBtn) deleteBtn.style.display = visible ? 'flex' : 'none';
         if (convertBtn) convertBtn.style.display = visible ? 'flex' : 'none';
+        if (duplicateBtn) duplicateBtn.style.display = visible ? 'flex' : 'none';
         if (moveBackBtn) moveBackBtn.style.display = visible ? 'flex' : 'none';
         if (moveForwardBtn) moveForwardBtn.style.display = visible ? 'flex' : 'none';
         if (moveSelect) moveSelect.style.display = visible ? 'inline-block' : 'none';
@@ -1926,7 +1929,7 @@ class DrawingApp {
                         ctx.lineTo(curr.x, curr.y);
                     }
                 }
-                if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= cmd.size) ctx.closePath();
+                if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= cmd.size * 2) ctx.closePath();
                 ctx.stroke();
             }
         } else if (cmd.type === 'fill') {
@@ -1997,7 +2000,7 @@ class DrawingApp {
         if (flat.length < 3) return null;
 
         const closed = cmd.closed || (flat.length > 2 &&
-            Math.hypot(flat[0].x - flat[flat.length - 1].x, flat[0].y - flat[flat.length - 1].y) <= cmd.size);
+            Math.hypot(flat[0].x - flat[flat.length - 1].x, flat[0].y - flat[flat.length - 1].y) <= cmd.size * 2);
 
         if (!closed) return null;
 
@@ -2060,7 +2063,7 @@ class DrawingApp {
             if (cmd.type !== 'brush') continue;
             const flat = this.sampleStroke(cmd.points);
             if (flat.length < 3) continue;
-            const closed = cmd.closed || Math.hypot(flat[0].x - flat[flat.length-1].x, flat[0].y - flat[flat.length-1].y) <= cmd.size;
+            const closed = cmd.closed || Math.hypot(flat[0].x - flat[flat.length-1].x, flat[0].y - flat[flat.length-1].y) <= cmd.size * 2;
             if (!closed || !this.pointInRing(x, y, flat)) continue;
             // Check no other non-fill object is inside this brush stroke
             let hasInner = false;
@@ -2080,7 +2083,7 @@ class DrawingApp {
             if (hasInner) break;
             // Fast path: duplicate brush stroke as fill
             let fillPts;
-            if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length-1].x, cmd.points[0].y - cmd.points[cmd.points.length-1].y) <= cmd.size) {
+            if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length-1].x, cmd.points[0].y - cmd.points[cmd.points.length-1].y) <= cmd.size * 2) {
                 fillPts = cmd.points.map(p => ({ ...p }));
             } else {
                 fillPts = cmd.points.map(p => ({ ...p }));
@@ -2309,7 +2312,7 @@ class DrawingApp {
         const flat = this.sampleStroke(pts);
         if (flat.length < 2) { console.log('brushToPolygon: flat too short'); return null; }
         const closed = cmd.closed || (flat.length > 2 &&
-            Math.hypot(flat[0].x - flat[flat.length - 1].x, flat[0].y - flat[flat.length - 1].y) <= cmd.size);
+            Math.hypot(flat[0].x - flat[flat.length - 1].x, flat[0].y - flat[flat.length - 1].y) <= cmd.size * 2);
         if (closed && flat.length > 2 &&
             (flat[0].x !== flat[flat.length - 1].x || flat[0].y !== flat[flat.length - 1].y)) {
             flat.push({ x: flat[0].x, y: flat[0].y });
@@ -3092,7 +3095,7 @@ class DrawingApp {
                                     d += ` L ${curr.x.toFixed(2)} ${curr.y.toFixed(2)}`;
                                 }
                             }
-                            if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= cmd.size) d += ' Z';
+                            if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= cmd.size * 2) d += ' Z';
                             svgParts.push(`    <path d="${d}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="${cmd.opacity}"/>`);
                         }
                     } else if (cmd.type === 'fill') {
@@ -4184,6 +4187,22 @@ class DrawingApp {
         this.viewportRender();
     }
 
+    duplicateSelected() {
+        if (this.selectedIndices.length === 0) return;
+        this.saveState();
+        const cmds = this.layers[this.activeLayerIndex].vectorCommands;
+        const sorted = [...this.selectedIndices].sort((a, b) => a - b);
+        const copies = sorted.map(i => JSON.parse(JSON.stringify(cmds[i])));
+        for (let k = 0; k < sorted.length; k++) {
+            cmds.splice(sorted[k] + k + 1, 0, copies[k]);
+        }
+        this.selectedIndices = sorted.map((_, k) => sorted[k] + k + 1);
+        this.selectedCommands = this.selectedIndices.map(i => cmds[i]);
+        this.updateSelectionBBox();
+        this.updateDeleteButton();
+        this.viewportRender();
+    }
+
     moveSelectedBackward() {
         if (this.selectedIndices.length === 0) return;
         this.saveState();
@@ -4394,6 +4413,12 @@ class DrawingApp {
                     this.updateDeleteButton();
                     this.viewportRender();
                 }
+            } else if (e.key === 'd' || e.key === 'D') {
+                e.preventDefault();
+                this.duplicateSelected();
+            } else if (e.key === 'o' || e.key === 'O') {
+                e.preventDefault();
+                this.openSVGFile();
             } else if (e.key === 's' || e.key === 'S') {
                 e.preventDefault();
                 this.exportSVG();
@@ -4542,6 +4567,7 @@ class DrawingApp {
             document.getElementById('convertBtn').style.display = 'none';
             document.getElementById('moveBackBtn').style.display = 'none';
             document.getElementById('moveForwardBtn').style.display = 'none';
+            document.getElementById('duplicateBtn').style.display = 'none';
             const layerBtns = ['addLayerBtn', 'deleteLayerBtn', 'moveUpLayerBtn', 'moveDownLayerBtn', 'mergeDownBtn', 'renameLayerBtn', 'clearLayerBtn'];
             layerBtns.forEach(id => {
                 document.getElementById(id).disabled = true;
