@@ -1074,7 +1074,7 @@ class DrawingApp {
         } else if (this.selectMode === 'marquee') {
             this.viewportRender();
         } else if (this.selectMode === 'resize') {
-            this.resizeSelected(coords, e.ctrlKey);
+            this.resizeSelected(coords, e.ctrlKey, e.shiftKey);
             this.updateSelectionBBox();
             this.viewportRender();
         }
@@ -1231,17 +1231,32 @@ class DrawingApp {
             const coords = this.getCanvasCoordinates(e);
             this.saveState();
 
-            activeLayer.vectorCommands.push({
-                type: this.currentTool,
-                color: this.brushColor,
-                size: this.brushSize,
-                opacity: this.brushOpacity,
-                x1: this.shapeStart.x,
-                y1: this.shapeStart.y,
-                x2: coords.x,
-                y2: coords.y
-            });
-
+            let cmd;
+            if (this.currentTool === 'line') {
+                cmd = { type: 'line', color: this.brushColor, size: this.brushSize, opacity: this.brushOpacity,
+                    x1: this.shapeStart.x, y1: this.shapeStart.y, x2: coords.x, y2: coords.y };
+            } else if (this.currentTool === 'rect') {
+                const x1 = Math.min(this.shapeStart.x, coords.x);
+                const y1 = Math.min(this.shapeStart.y, coords.y);
+                const x2 = Math.max(this.shapeStart.x, coords.x);
+                const y2 = Math.max(this.shapeStart.y, coords.y);
+                cmd = { type: 'brush', color: this.brushColor, size: this.brushSize, opacity: this.brushOpacity,
+                    points: [{ x: x1, y: y1 }, { x: x2, y: y1 }, { x: x2, y: y2 }, { x: x1, y: y2 }], closed: true };
+            } else {
+                const cx = (this.shapeStart.x + coords.x) / 2;
+                const cy = (this.shapeStart.y + coords.y) / 2;
+                const rx = Math.abs(coords.x - this.shapeStart.x) / 2;
+                const ry = Math.abs(coords.y - this.shapeStart.y) / 2;
+                const pts = [];
+                const steps = 36;
+                for (let i = 0; i < steps; i++) {
+                    const a = (i / steps) * Math.PI * 2;
+                    pts.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
+                }
+                cmd = { type: 'brush', color: this.brushColor, size: this.brushSize, opacity: this.brushOpacity,
+                    points: pts, closed: true };
+            }
+            activeLayer.vectorCommands.push(cmd);
             this.shapeStart = null;
         }
 
@@ -1759,7 +1774,7 @@ class DrawingApp {
         this.viewportRender();
     }
 
-    resizeSelected(coords, ctrlKey) {
+    resizeSelected(coords, ctrlKey, shiftKey) {
         const activeLayer = this.layers[this.activeLayerIndex];
         const bbox = this.selectionBBox;
         const handle = this.resizeHandle;
@@ -1772,25 +1787,36 @@ class DrawingApp {
         if (isCorner && start) {
             const aspect = start.w / start.h;
             let anchorX, anchorY;
-            if (handle === 'br' || handle === 'tr') anchorX = start.x;
-            else anchorX = start.x + start.w;
-            if (handle === 'br' || handle === 'bl') anchorY = start.y;
-            else anchorY = start.y + start.h;
+            if (shiftKey) {
+                anchorX = start.x + start.w / 2;
+                anchorY = start.y + start.h / 2;
+            } else {
+                if (handle === 'br' || handle === 'tr') anchorX = start.x;
+                else anchorX = start.x + start.w;
+                if (handle === 'br' || handle === 'bl') anchorY = start.y;
+                else anchorY = start.y + start.h;
+            }
 
             const dx = coords.x - anchorX;
             const dy = coords.y - anchorY;
             const absDx = Math.abs(dx);
             const absDy = Math.abs(dy);
+            const scaleMul = shiftKey ? 2 : 1;
             const s = absDx / start.w >= absDy / start.h
-                ? (absDx > 0.1 ? dx / start.w : 0.01)
-                : (absDy > 0.1 ? dy / start.h : 0.01);
+                ? (absDx > 0.1 ? dx / start.w * scaleMul : 0.01)
+                : (absDy > 0.1 ? dy / start.h * scaleMul : 0.01);
 
             const absScale = Math.max(Math.abs(s), 0.01);
             newBBox.w = start.w * absScale;
             newBBox.h = start.h * absScale;
 
-            if (handle === 'bl' || handle === 'tl') newBBox.x = anchorX - newBBox.w;
-            if (handle === 'tr' || handle === 'tl') newBBox.y = anchorY - newBBox.h;
+            if (shiftKey) {
+                newBBox.x = anchorX - newBBox.w / 2;
+                newBBox.y = anchorY - newBBox.h / 2;
+            } else {
+                if (handle === 'bl' || handle === 'tl') newBBox.x = anchorX - newBBox.w;
+                if (handle === 'tr' || handle === 'tl') newBBox.y = anchorY - newBBox.h;
+            }
 
             const minW = Math.max(16, Math.round(16 * aspect));
             const minH = Math.max(16, Math.round(16 / aspect));
@@ -1798,33 +1824,58 @@ class DrawingApp {
             if (sMin > 1) {
                 newBBox.w *= sMin;
                 newBBox.h *= sMin;
-                switch (handle) {
-                    case 'bl': case 'tl': newBBox.x = (start.x + start.w) - newBBox.w; break;
-                }
-                switch (handle) {
-                    case 'tr': case 'tl': newBBox.y = (start.y + start.h) - newBBox.h; break;
+                if (shiftKey) {
+                    newBBox.x = anchorX - newBBox.w / 2;
+                    newBBox.y = anchorY - newBBox.h / 2;
+                } else {
+                    switch (handle) {
+                        case 'bl': case 'tl': newBBox.x = (start.x + start.w) - newBBox.w; break;
+                    }
+                    switch (handle) {
+                        case 'tr': case 'tl': newBBox.y = (start.y + start.h) - newBBox.h; break;
+                    }
                 }
             }
         } else if (ctrlKey && start && ['ml', 'mr', 'tm', 'bm'].includes(handle)) {
             const aspect = start.w / start.h;
-            if (handle === 'mr') {
-                newBBox.w = coords.x - bbox.x;
-                newBBox.h = newBBox.w / aspect;
-                newBBox.y = bbox.cy - newBBox.h / 2;
-            } else if (handle === 'ml') {
-                newBBox.w = (bbox.x + bbox.w) - coords.x;
-                newBBox.x = coords.x;
-                newBBox.h = newBBox.w / aspect;
-                newBBox.y = bbox.cy - newBBox.h / 2;
-            } else if (handle === 'bm') {
-                newBBox.h = coords.y - bbox.y;
-                newBBox.w = newBBox.h * aspect;
-                newBBox.x = bbox.cx - newBBox.w / 2;
-            } else if (handle === 'tm') {
-                newBBox.h = (bbox.y + bbox.h) - coords.y;
-                newBBox.y = coords.y;
-                newBBox.w = newBBox.h * aspect;
-                newBBox.x = bbox.cx - newBBox.w / 2;
+            if (shiftKey) {
+                if (handle === 'mr') {
+                    const halfW = Math.max(8, coords.x - bbox.cx);
+                    newBBox.w = halfW * 2; newBBox.h = newBBox.w / aspect;
+                    newBBox.x = bbox.cx - halfW; newBBox.y = bbox.cy - newBBox.h / 2;
+                } else if (handle === 'ml') {
+                    const halfW = Math.max(8, bbox.cx - coords.x);
+                    newBBox.w = halfW * 2; newBBox.h = newBBox.w / aspect;
+                    newBBox.x = bbox.cx - halfW; newBBox.y = bbox.cy - newBBox.h / 2;
+                } else if (handle === 'bm') {
+                    const halfH = Math.max(8, coords.y - bbox.cy);
+                    newBBox.h = halfH * 2; newBBox.w = newBBox.h * aspect;
+                    newBBox.y = bbox.cy - halfH; newBBox.x = bbox.cx - newBBox.w / 2;
+                } else if (handle === 'tm') {
+                    const halfH = Math.max(8, bbox.cy - coords.y);
+                    newBBox.h = halfH * 2; newBBox.w = newBBox.h * aspect;
+                    newBBox.y = bbox.cy - halfH; newBBox.x = bbox.cx - newBBox.w / 2;
+                }
+            } else {
+                if (handle === 'mr') {
+                    newBBox.w = coords.x - bbox.x;
+                    newBBox.h = newBBox.w / aspect;
+                    newBBox.y = bbox.cy - newBBox.h / 2;
+                } else if (handle === 'ml') {
+                    newBBox.w = (bbox.x + bbox.w) - coords.x;
+                    newBBox.x = coords.x;
+                    newBBox.h = newBBox.w / aspect;
+                    newBBox.y = bbox.cy - newBBox.h / 2;
+                } else if (handle === 'bm') {
+                    newBBox.h = coords.y - bbox.y;
+                    newBBox.w = newBBox.h * aspect;
+                    newBBox.x = bbox.cx - newBBox.w / 2;
+                } else if (handle === 'tm') {
+                    newBBox.h = (bbox.y + bbox.h) - coords.y;
+                    newBBox.y = coords.y;
+                    newBBox.w = newBBox.h * aspect;
+                    newBBox.x = bbox.cx - newBBox.w / 2;
+                }
             }
             const minW = Math.max(16, Math.round(16 * aspect));
             const minH = Math.max(16, Math.round(16 / aspect));
@@ -1834,6 +1885,24 @@ class DrawingApp {
                 newBBox.h *= sMin;
                 newBBox.x = bbox.cx - newBBox.w / 2;
                 newBBox.y = bbox.cy - newBBox.h / 2;
+            }
+        } else if (shiftKey && start && ['ml', 'mr', 'tm', 'bm'].includes(handle)) {
+            if (handle === 'mr') {
+                const halfW = Math.max(8, coords.x - bbox.cx);
+                newBBox.w = halfW * 2;
+                newBBox.x = bbox.cx - halfW;
+            } else if (handle === 'ml') {
+                const halfW = Math.max(8, bbox.cx - coords.x);
+                newBBox.w = halfW * 2;
+                newBBox.x = bbox.cx - halfW;
+            } else if (handle === 'bm') {
+                const halfH = Math.max(8, coords.y - bbox.cy);
+                newBBox.h = halfH * 2;
+                newBBox.y = bbox.cy - halfH;
+            } else if (handle === 'tm') {
+                const halfH = Math.max(8, bbox.cy - coords.y);
+                newBBox.h = halfH * 2;
+                newBBox.y = bbox.cy - halfH;
             }
         } else {
             switch (handle) {
@@ -3503,22 +3572,17 @@ class DrawingApp {
                         ]
                     });
                 }
+                const rectPts = [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
                 if (hasRectStroke) {
                     commands.push({
-                        type: 'rect',
-                        color: stroke,
-                        size: strokeWidth * (scaleX + scaleY) / 2,
-                        opacity,
-                        x1: x, y1: y, x2: x + w, y2: y + h
+                        type: 'brush', color: stroke, size: strokeWidth * (scaleX + scaleY) / 2,
+                        opacity, points: rectPts, closed: true
                     });
                 }
                 if (!hasRectFill && !hasRectStroke) {
                     commands.push({
-                        type: 'rect',
-                        color: '#000000',
-                        size: strokeWidth * (scaleX + scaleY) / 2,
-                        opacity,
-                        x1: x, y1: y, x2: x + w, y2: y + h
+                        type: 'brush', color: '#000000', size: strokeWidth * (scaleX + scaleY) / 2,
+                        opacity, points: rectPts, closed: true
                     });
                 }
             } else if (tag === 'circle') {
@@ -3537,16 +3601,21 @@ class DrawingApp {
                         type: 'fill', color: fill, opacity, points: fillPoints
                     });
                 }
+                const circlePts = [];
+                for (let i = 0; i < 36; i++) {
+                    const a = (i / 36) * Math.PI * 2;
+                    circlePts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+                }
                 if (hasCircleStroke) {
                     commands.push({
-                        type: 'circle', color: stroke, size: strokeWidth * (scaleX + scaleY) / 2, opacity,
-                        x1: cx - r, y1: cy - r, x2: cx + r, y2: cy + r
+                        type: 'brush', color: stroke, size: strokeWidth * (scaleX + scaleY) / 2,
+                        opacity, points: circlePts, closed: true
                     });
                 }
                 if (!hasCircleFill && !hasCircleStroke) {
                     commands.push({
-                        type: 'circle', color: '#000000', size: strokeWidth * (scaleX + scaleY) / 2, opacity,
-                        x1: cx - r, y1: cy - r, x2: cx + r, y2: cy + r
+                        type: 'brush', color: '#000000', size: strokeWidth * (scaleX + scaleY) / 2,
+                        opacity, points: circlePts, closed: true
                     });
                 }
             } else if (tag === 'ellipse') {
@@ -3566,16 +3635,21 @@ class DrawingApp {
                         type: 'fill', color: fill, opacity, points: fillPoints
                     });
                 }
+                const ellipsePts = [];
+                for (let i = 0; i < 36; i++) {
+                    const a = (i / 36) * Math.PI * 2;
+                    ellipsePts.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
+                }
                 if (hasEllipseStroke) {
                     commands.push({
-                        type: 'circle', color: stroke, size: strokeWidth * (scaleX + scaleY) / 2, opacity,
-                        x1: cx - rx, y1: cy - ry, x2: cx + rx, y2: cy + ry
+                        type: 'brush', color: stroke, size: strokeWidth * (scaleX + scaleY) / 2,
+                        opacity, points: ellipsePts, closed: true
                     });
                 }
                 if (!hasEllipseFill && !hasEllipseStroke) {
                     commands.push({
-                        type: 'circle', color: '#000000', size: strokeWidth * (scaleX + scaleY) / 2, opacity,
-                        x1: cx - rx, y1: cy - ry, x2: cx + rx, y2: cy + ry
+                        type: 'brush', color: '#000000', size: strokeWidth * (scaleX + scaleY) / 2,
+                        opacity, points: ellipsePts, closed: true
                     });
                 }
             } else if (tag === 'image') {
@@ -4416,6 +4490,9 @@ class DrawingApp {
             } else if (e.key === 'd' || e.key === 'D') {
                 e.preventDefault();
                 this.duplicateSelected();
+            } else if (e.key === 'i' || e.key === 'I') {
+                e.preventDefault();
+                document.getElementById('importImageBtn').click();
             } else if (e.key === 'o' || e.key === 'O') {
                 e.preventDefault();
                 this.openSVGFile();
