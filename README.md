@@ -73,6 +73,8 @@ A lightweight, browser-based vector drawing application with layer support, SVG 
 | **Ctrl+Y** / **Ctrl+Shift+Z** | Redo                      |
 | **Ctrl+A**                | Select all                    |
 | **Ctrl+S**                | Export SVG                    |
+| **Ctrl+I**                | Import image                  |
+| **Tab**                   | Toggle layer panel visibility |
 | **Ctrl+0**                | Reset zoom, pan & rotation    |
 | **Delete / Backspace**    | Delete selected objects       |
 | **F2**                    | Rename active layer           |
