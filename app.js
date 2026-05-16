@@ -3,6 +3,12 @@ class DrawingApp {
         this.viewportCanvas = document.getElementById('viewportCanvas');
         this.viewportCtx = this.viewportCanvas.getContext('2d');
         this.canvasContainer = document.getElementById('canvasContainer');
+        this.viewportCanvas.setAttribute('tabindex', '0');
+        this.viewportCanvas.addEventListener('mouseenter', () => {
+            if (document.activeElement !== this.viewportCanvas) {
+                this.viewportCanvas.focus({ preventScroll: true });
+            }
+        });
 
         this.canvasCSSWidth = 0;
         this.canvasCSSHeight = 0;
