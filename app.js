@@ -4440,6 +4440,20 @@ class DrawingApp {
             }
         }
 
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            const panel = document.querySelector('.layer-panel');
+            if (!panel) return;
+            const isHidden = panel.style.display === 'none';
+            panel.style.display = isHidden ? 'flex' : 'none';
+            const containerRect = this.canvasContainer.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            this.viewportCanvas.width = containerRect.width * dpr;
+            this.viewportCanvas.height = containerRect.height * dpr;
+            this.viewportRender();
+            return;
+        }
+
         if (e.key === 'Escape') {
             if (this.currentTool === 'pen' && this.isPenActive) {
                 e.preventDefault();
