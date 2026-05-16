@@ -47,6 +47,7 @@ class DrawingApp {
         this.selectedCommands = [];
         this.selectedIndices = [];
         this.selectionBBox = null;
+        this.selectionRotation = 0;
 
         this.isSelecting = false;
         this.isPanning = false;
@@ -712,14 +713,25 @@ class DrawingApp {
         const lineWidth = (1 + 1 * hs.t) * hs.scale;
         const borderWidth = (2.5 + 2.5 * hs.t) * hs.scale;
         const fontSize = Math.round((10 + 10 * hs.t) / (hs.baseScale * hs.z)) + 'px';
+        const rot = this.selectionRotation || 0;
 
+        const cos = Math.cos(rot), sin = Math.sin(rot);
+        const rx = (x, y) => bbox.cx + (x - bbox.cx) * cos - (y - bbox.cy) * sin;
+        const ry = (x, y) => bbox.cy + (x - bbox.cx) * sin + (y - bbox.cy) * cos;
+
+        ctx.save();
+        if (rot) {
+            ctx.translate(bbox.cx, bbox.cy);
+            ctx.rotate(rot);
+            ctx.translate(-bbox.cx, -bbox.cy);
+        }
         ctx.strokeStyle = '#4a9eff';
         ctx.lineWidth = lineWidth;
         ctx.setLineDash([dashLen, dashLen]);
         ctx.strokeRect(bbox.x, bbox.y, bbox.w, bbox.h);
         ctx.setLineDash([]);
 
-        const corners = [
+        const handlePositions = [
             { x: bbox.x, y: bbox.y },
             { x: bbox.x + bbox.w / 2, y: bbox.y },
             { x: bbox.x + bbox.w, y: bbox.y },
@@ -733,29 +745,31 @@ class DrawingApp {
         ctx.fillStyle = '#ffffff';
         ctx.strokeStyle = '#4a9eff';
         ctx.lineWidth = borderWidth;
-        corners.forEach(c => {
+        handlePositions.forEach(c => {
             ctx.beginPath();
             ctx.fillRect(c.x - handleSize / 2, c.y - handleSize / 2, handleSize, handleSize);
             ctx.strokeRect(c.x - handleSize / 2, c.y - handleSize / 2, handleSize, handleSize);
         });
+        ctx.restore();
 
-        const rotateHandle = this.getRotateHandle();
+        const rHandleX = rx(bbox.cx, bbox.y - 25);
+        const rHandleY = ry(bbox.cx, bbox.y - 25);
         ctx.strokeStyle = '#4a9eff';
         ctx.lineWidth = lineWidth;
         ctx.beginPath();
-        ctx.moveTo(bbox.cx, bbox.y);
-        ctx.lineTo(rotateHandle.x, rotateHandle.y);
+        ctx.moveTo(rx(bbox.cx, bbox.y), ry(bbox.cx, bbox.y));
+        ctx.lineTo(rHandleX, rHandleY);
         ctx.stroke();
 
         ctx.beginPath();
         ctx.fillStyle = '#4a9eff';
-        ctx.arc(rotateHandle.x, rotateHandle.y, handleSize, 0, Math.PI * 2);
+        ctx.arc(rHandleX, rHandleY, handleSize, 0, Math.PI * 2);
         ctx.fill();
         ctx.fillStyle = '#ffffff';
         ctx.font = fontSize + ' sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('\u21BB', rotateHandle.x, rotateHandle.y);
+        ctx.fillText('\u21BB', rHandleX, rHandleY);
     }
 
     handleContainerMouseDown(e) {
@@ -930,6 +944,18 @@ class DrawingApp {
                 x: this.selectionBBox.x, y: this.selectionBBox.y,
                 w: this.selectionBBox.w, h: this.selectionBBox.h
             };
+            this.resizeStartLocalDims = null;
+            if (this.selectionRotation) {
+                const activeLayer = this.layers[this.activeLayerIndex];
+                this.resizeStartLocalDims = [];
+                for (const idx of this.selectedIndices) {
+                    const c = activeLayer.vectorCommands[idx];
+                    if (c.type === 'image') {
+                        this.resizeStartLocalDims.push({ idx, w: c.width, h: c.height, x: c.x, y: c.y });
+                    }
+                }
+                if (this.resizeStartLocalDims.length === 0) this.resizeStartLocalDims = null;
+            }
             this.isDrawing = false;
             return;
         }
@@ -1125,6 +1151,7 @@ class DrawingApp {
 
         this.selectMode = null;
         this.resizeHandle = null;
+        this.resizeStartLocalDims = null;
     }
 
     handleMouseMove(e) {
@@ -1340,11 +1367,12 @@ class DrawingApp {
                 this.redoStack = [];
             }
             this.isSelecting = false;
-        this.selectMode = null;
-        this.resizeHandle = null;
-        this.resizeStartBBox = null;
+            this.selectMode = null;
+            this.resizeHandle = null;
+            this.resizeStartBBox = null;
             this.isRotating = false;
             this.rotationCenter = null;
+            this.resizeStartLocalDims = null;
         }
         this.viewportRender();
     }
@@ -1483,6 +1511,8 @@ class DrawingApp {
         this.isRotating = false;
         this.selectMode = null;
         this.resizeHandle = null;
+        this.resizeStartLocalDims = null;
+        this.selectionRotation = 0;
         this.updateDeleteButton();
         this.viewportRender();
     }
@@ -1524,6 +1554,12 @@ class DrawingApp {
     getRotateHandle() {
         if (!this.selectionBBox) return null;
         const bbox = this.selectionBBox;
+        const rot = this.selectionRotation || 0;
+        const off = bbox.h / 2 + 25;
+        if (rot) {
+            const cos = Math.cos(rot), sin = Math.sin(rot);
+            return { x: bbox.cx + off * sin, y: bbox.cy - off * cos };
+        }
         return { x: bbox.cx, y: bbox.y - 25 };
     }
 
@@ -1532,19 +1568,42 @@ class DrawingApp {
         const bbox = this.selectionBBox;
         const hs = this.getHandleScale();
         const handleSize = (7.5 + 7.5 * hs.t) * hs.scale;
-        const handles = [
-            { name: 'tl', x: bbox.x, y: bbox.y },
-            { name: 'tm', x: bbox.x + bbox.w / 2, y: bbox.y },
-            { name: 'tr', x: bbox.x + bbox.w, y: bbox.y },
-            { name: 'ml', x: bbox.x, y: bbox.y + bbox.h / 2 },
-            { name: 'mr', x: bbox.x + bbox.w, y: bbox.y + bbox.h / 2 },
-            { name: 'bl', x: bbox.x, y: bbox.y + bbox.h },
-            { name: 'bm', x: bbox.x + bbox.w / 2, y: bbox.y + bbox.h },
-            { name: 'br', x: bbox.x + bbox.w, y: bbox.y + bbox.h }
-        ];
+        const rot = this.selectionRotation || 0;
+        let handles;
+        if (rot) {
+            const cos = Math.cos(rot), sin = Math.sin(rot);
+            const pts = [
+                { x: bbox.x, y: bbox.y },
+                { x: bbox.x + bbox.w / 2, y: bbox.y },
+                { x: bbox.x + bbox.w, y: bbox.y },
+                { x: bbox.x, y: bbox.y + bbox.h / 2 },
+                { x: bbox.x + bbox.w, y: bbox.y + bbox.h / 2 },
+                { x: bbox.x, y: bbox.y + bbox.h },
+                { x: bbox.x + bbox.w / 2, y: bbox.y + bbox.h },
+                { x: bbox.x + bbox.w, y: bbox.y + bbox.h }
+            ];
+            const names = ['tl', 'tm', 'tr', 'ml', 'mr', 'bl', 'bm', 'br'];
+            handles = pts.map((p, i) => ({
+                name: names[i],
+                x: bbox.cx + (p.x - bbox.cx) * cos - (p.y - bbox.cy) * sin,
+                y: bbox.cy + (p.x - bbox.cx) * sin + (p.y - bbox.cy) * cos
+            }));
+        } else {
+            handles = [
+                { name: 'tl', x: bbox.x, y: bbox.y },
+                { name: 'tm', x: bbox.x + bbox.w / 2, y: bbox.y },
+                { name: 'tr', x: bbox.x + bbox.w, y: bbox.y },
+                { name: 'ml', x: bbox.x, y: bbox.y + bbox.h / 2 },
+                { name: 'mr', x: bbox.x + bbox.w, y: bbox.y + bbox.h / 2 },
+                { name: 'bl', x: bbox.x, y: bbox.y + bbox.h },
+                { name: 'bm', x: bbox.x + bbox.w / 2, y: bbox.y + bbox.h },
+                { name: 'br', x: bbox.x + bbox.w, y: bbox.y + bbox.h }
+            ];
+        }
 
+        const tol = handleSize + 2;
         for (const h of handles) {
-            if (Math.abs(mx - h.x) < handleSize && Math.abs(my - h.y) < handleSize) {
+            if (Math.abs(mx - h.x) < tol && Math.abs(my - h.y) < tol) {
                 return h.name;
             }
         }
@@ -1558,6 +1617,8 @@ class DrawingApp {
         }
 
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        let selRot = null;
+        let hasNonImage = false;
 
         for (const cmd of this.selectedCommands) {
             const cmdBBox = this.getCommandBBox(cmd);
@@ -1566,7 +1627,18 @@ class DrawingApp {
             minY = Math.min(minY, cmdBBox.minY);
             maxX = Math.max(maxX, cmdBBox.maxX);
             maxY = Math.max(maxY, cmdBBox.maxY);
+            if (cmd.type === 'image') {
+                if (cmd.rotation) {
+                    selRot = selRot === null ? cmd.rotation : (Math.abs(selRot - cmd.rotation) < 0.001 ? selRot : null);
+                } else {
+                    selRot = null;
+                }
+            } else {
+                hasNonImage = true;
+            }
         }
+
+        if (hasNonImage) selRot = null;
 
         if (minX === Infinity) {
             this.selectionBBox = null;
@@ -1582,6 +1654,7 @@ class DrawingApp {
             cx: (minX + maxX) / 2,
             cy: (minY + maxY) / 2
         };
+        this.selectionRotation = selRot || 0;
     }
 
     getCommandBBox(cmd) {
@@ -1622,12 +1695,20 @@ class DrawingApp {
             const ry = Math.abs(cmd.y2 - cmd.y1) / 2 + margin;
             return { minX: cx - rx, minY: cy - ry, maxX: cx + rx, maxY: cy + ry };
         } else if (cmd.type === 'image') {
-            return {
-                minX: cmd.x,
-                minY: cmd.y,
-                maxX: cmd.x + cmd.width,
-                maxY: cmd.y + cmd.height
-            };
+            if (cmd.rotation) {
+                const cx = cmd.x + cmd.width / 2, cy = cmd.y + cmd.height / 2;
+                const cos = Math.cos(cmd.rotation), sin = Math.sin(cmd.rotation);
+                const hw = cmd.width / 2, hh = cmd.height / 2;
+                const corners = [{x:-hw,y:-hh},{x:hw,y:-hh},{x:hw,y:hh},{x:-hw,y:hh}];
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                for (const c of corners) {
+                    const rx = cx + c.x * cos - c.y * sin, ry = cy + c.x * sin + c.y * cos;
+                    if (rx < minX) minX = rx; if (rx > maxX) maxX = rx;
+                    if (ry < minY) minY = ry; if (ry > maxY) maxY = ry;
+                }
+                return { minX, minY, maxX, maxY };
+            }
+            return { minX: cmd.x, minY: cmd.y, maxX: cmd.x + cmd.width, maxY: cmd.y + cmd.height };
         }
         return null;
     }
@@ -1670,6 +1751,13 @@ class DrawingApp {
             if (dist < 1) return false;
             return Math.abs(dist - 1) < hitRadius / Math.max(rx, ry);
         } else if (cmd.type === 'image') {
+            if (cmd.rotation) {
+                const cx = cmd.x + cmd.width / 2, cy = cmd.y + cmd.height / 2;
+                const cos = Math.cos(-cmd.rotation), sin = Math.sin(-cmd.rotation);
+                const dx = mx - cx, dy = my - cy;
+                const lx = dx * cos - dy * sin, ly = dx * sin + dy * cos;
+                return lx >= -cmd.width / 2 && lx <= cmd.width / 2 && ly >= -cmd.height / 2 && ly <= cmd.height / 2;
+            }
             return mx >= cmd.x && mx <= cmd.x + cmd.width && my >= cmd.y && my <= cmd.y + cmd.height;
         }
         return false;
@@ -1758,16 +1846,13 @@ class DrawingApp {
                     }
                 });
             } else if (cmd.type === 'image') {
-                const dx = cmd.x - cx, dy = cmd.y - cy;
-                const dx2 = cmd.x + cmd.width - cx, dy2 = cmd.y + cmd.height - cy;
-                const nx = cx + dx * cos - dy * sin;
-                const ny = cy + dx * sin + dy * cos;
-                const nx2 = cx + dx2 * cos - dy2 * sin;
-                const ny2 = cy + dx2 * sin + dy2 * cos;
-                cmd.x = Math.min(nx, nx2);
-                cmd.y = Math.min(ny, ny2);
-                cmd.width = Math.abs(nx2 - nx);
-                cmd.height = Math.abs(ny2 - ny);
+                const icx = cmd.x + cmd.width / 2, icy = cmd.y + cmd.height / 2;
+                const idx = icx - cx, idy = icy - cy;
+                const inx = cx + idx * cos - idy * sin;
+                const iny = cy + idx * sin + idy * cos;
+                cmd.x = inx - cmd.width / 2;
+                cmd.y = iny - cmd.height / 2;
+                cmd.rotation = (cmd.rotation || 0) + angle;
             } else {
                 const dx1 = cmd.x1 - cx, dy1 = cmd.y1 - cy;
                 cmd.x1 = cx + dx1 * cos - dy1 * sin;
@@ -1785,6 +1870,76 @@ class DrawingApp {
         const bbox = this.selectionBBox;
         const handle = this.resizeHandle;
         const start = this.resizeStartBBox;
+        const rot = this.selectionRotation || 0;
+
+        if (rot && this.resizeStartLocalDims) {
+            const cos = Math.cos(rot), sin = Math.sin(rot);
+            const rotX = (px, py) => bbox.cx + (px - bbox.cx) * cos - (py - bbox.cy) * sin;
+            const rotY = (px, py) => bbox.cy + (px - bbox.cx) * sin + (py - bbox.cy) * cos;
+            const localPts = {
+                tl: { x: bbox.x, y: bbox.y }, tr: { x: bbox.x + bbox.w, y: bbox.y },
+                bl: { x: bbox.x, y: bbox.y + bbox.h }, br: { x: bbox.x + bbox.w, y: bbox.y + bbox.h },
+                tm: { x: bbox.cx, y: bbox.y }, bm: { x: bbox.cx, y: bbox.y + bbox.h },
+                ml: { x: bbox.x, y: bbox.cy }, mr: { x: bbox.x + bbox.w, y: bbox.cy }
+            };
+            const v = {};
+            for (const k in localPts) v[k] = { x: rotX(localPts[k].x, localPts[k].y), y: rotY(localPts[k].x, localPts[k].y) };
+            const oppKey = { br: 'tl', tl: 'br', tr: 'bl', bl: 'tr', mr: 'ml', ml: 'mr', bm: 'tm', tm: 'bm' };
+            const hPt = v[handle], oPt = v[oppKey[handle]];
+            const dX = hPt.x - oPt.x, dY = hPt.y - oPt.y, dL = Math.hypot(dX, dY) || 1;
+            const isCorner = handle === 'br' || handle === 'bl' || handle === 'tr' || handle === 'tl';
+
+            for (const dim of this.resizeStartLocalDims) {
+                const cmd = activeLayer.vectorCommands[dim.idx];
+                if (!cmd || cmd.type !== 'image') continue;
+                const sw = dim.w, sh = dim.h, sx = dim.x, sy = dim.y;
+                const proj = ((coords.x - oPt.x) * dX + (coords.y - oPt.y) * dY) / dL;
+                const scale = Math.max(proj / dL, 0.01);
+
+                if (isCorner) {
+                    let nw = sw * scale, nh = sh * scale;
+                    const minW = Math.max(16, Math.round(16 * sw / sh));
+                    const minH = Math.max(16, Math.round(16 / (sw / sh)));
+                    const sMin = Math.max(minW / nw, minH / nh, 1);
+                    if (sMin > 1) { nw *= sMin; nh *= sMin; }
+                    if (ctrlKey) { const a = sw / sh; if (nw / nh > a) nh = nw / a; else nw = nh * a; }
+                    cmd.width = Math.max(16, nw); cmd.height = Math.max(16, nh);
+                    const snap = Math.round(rot / (Math.PI / 2)) * (Math.PI / 2);
+                    const idx = (Math.round(snap / (Math.PI / 2)) % 4 + 4) % 4;
+                    const lh = { br: ['br','tr','tl','bl'], tr: ['tr','tl','bl','br'],
+                        bl: ['bl','br','tr','tl'], tl: ['tl','bl','br','tr'] }[handle][idx];
+                    const anchorL = {
+                        tl: { x: sx + sw, y: sy + sh }, br: { x: sx, y: sy },
+                        tr: { x: sx, y: sy + sh }, bl: { x: sx + sw, y: sy }
+                    }[lh];
+                    if (shiftKey) {
+                        cmd.x = (sx + sw / 2) - cmd.width / 2;
+                        cmd.y = (sy + sh / 2) - cmd.height / 2;
+                    } else if (anchorL) {
+                        cmd.x = (lh === 'bl' || lh === 'tl') ? anchorL.x - cmd.width : anchorL.x;
+                        cmd.y = (lh === 'tr' || lh === 'tl') ? anchorL.y - cmd.height : anchorL.y;
+                    }
+                } else {
+                    const projX = Math.abs(dX * cos + dY * sin);
+                    const projY = Math.abs(-dX * sin + dY * cos);
+                    if (projX >= projY) {
+                        const nw = Math.max(16, sw * scale);
+                        cmd.width = nw;
+                        cmd.x = (handle === 'mr' || handle === 'br' || handle === 'tr') ? sx : (sx + sw) - nw;
+                        cmd.y = sy;
+                    } else {
+                        const nh = Math.max(16, sh * scale);
+                        cmd.height = nh;
+                        cmd.y = (handle === 'bm' || handle === 'br' || handle === 'bl') ? sy : (sy + sh) - nh;
+                        cmd.x = sx;
+                    }
+                }
+            }
+            this.viewportRender();
+            this.updateSelectionBBox();
+            this.syncSizeToSelection();
+            return;
+        }
 
         let newBBox = { x: bbox.x, y: bbox.y, w: bbox.w, h: bbox.h };
 
@@ -2058,7 +2213,15 @@ class DrawingApp {
         } else if (cmd.type === 'image') {
             const img = this.imageCache[cmd.src];
             if (img) {
-                ctx.drawImage(img, cmd.x, cmd.y, cmd.width, cmd.height);
+                if (cmd.rotation) {
+                    ctx.save();
+                    ctx.translate(cmd.x + cmd.width / 2, cmd.y + cmd.height / 2);
+                    ctx.rotate(cmd.rotation);
+                    ctx.drawImage(img, -cmd.width / 2, -cmd.height / 2, cmd.width, cmd.height);
+                    ctx.restore();
+                } else {
+                    ctx.drawImage(img, cmd.x, cmd.y, cmd.width, cmd.height);
+                }
             }
         }
     }
@@ -3217,7 +3380,14 @@ class DrawingApp {
                     } else if (cmd.type === 'image') {
                         const img = this.imageCache[cmd.src];
                         if (img) {
-                            svgParts.push(`    <image x="${cmd.x.toFixed(2)}" y="${cmd.y.toFixed(2)}" width="${cmd.width.toFixed(2)}" height="${cmd.height.toFixed(2)}" href="${cmd.src}" opacity="${cmd.opacity !== undefined ? cmd.opacity : 1}"/>`);
+                            let imgAttrs = `x="${cmd.x.toFixed(2)}" y="${cmd.y.toFixed(2)}" width="${cmd.width.toFixed(2)}" height="${cmd.height.toFixed(2)}"`;
+                            if (cmd.rotation) {
+                                const cx = cmd.x + cmd.width / 2;
+                                const cy = cmd.y + cmd.height / 2;
+                                const deg = cmd.rotation * 180 / Math.PI;
+                                imgAttrs += ` transform="rotate(${deg.toFixed(2)} ${cx.toFixed(2)} ${cy.toFixed(2)})"`;
+                            }
+                            svgParts.push(`    <image ${imgAttrs} href="${cmd.src}" opacity="${cmd.opacity !== undefined ? cmd.opacity : 1}"/>`);
                         }
                     }
                 }
