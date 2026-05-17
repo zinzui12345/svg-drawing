@@ -315,13 +315,37 @@ class DrawingApp {
         });
 
         document.getElementById('gradientCx').addEventListener('input', (e) => {
-            this.updateGradientControl('cx', parseFloat(e.target.value) / 100);
+            const val = parseFloat(e.target.value);
+            document.getElementById('gradientCxValue').value = val;
+            this.updateGradientControl('cx', val / 100);
+        });
+        document.getElementById('gradientCxValue').addEventListener('change', (e) => {
+            const val = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
+            document.getElementById('gradientCx').value = val;
+            document.getElementById('gradientCxValue').value = val;
+            this.updateGradientControl('cx', val / 100);
         });
         document.getElementById('gradientCy').addEventListener('input', (e) => {
-            this.updateGradientControl('cy', parseFloat(e.target.value) / 100);
+            const val = parseFloat(e.target.value);
+            document.getElementById('gradientCyValue').value = val;
+            this.updateGradientControl('cy', val / 100);
+        });
+        document.getElementById('gradientCyValue').addEventListener('change', (e) => {
+            const val = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
+            document.getElementById('gradientCy').value = val;
+            document.getElementById('gradientCyValue').value = val;
+            this.updateGradientControl('cy', val / 100);
         });
         document.getElementById('gradientR').addEventListener('input', (e) => {
-            this.updateGradientControl('r', parseFloat(e.target.value) / 100);
+            const val = parseFloat(e.target.value);
+            document.getElementById('gradientRValue').value = val;
+            this.updateGradientControl('r', val / 100);
+        });
+        document.getElementById('gradientRValue').addEventListener('change', (e) => {
+            const val = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
+            document.getElementById('gradientR').value = val;
+            document.getElementById('gradientRValue').value = val;
+            this.updateGradientControl('r', val / 100);
         });
 
         document.getElementById('addStopBtn').addEventListener('click', () => {
@@ -1190,6 +1214,7 @@ class DrawingApp {
         const fillControls = document.getElementById('fillControls');
         if (this.selectedIndices.length === 0) {
             fillControls.style.display = 'none';
+            colorPicker.style.display = '';
             return;
         }
         const activeLayer = this.layers[this.activeLayerIndex];
@@ -1235,9 +1260,15 @@ class DrawingApp {
         document.getElementById('linearControls').style.display = isRadial ? 'none' : 'block';
         document.getElementById('radialControls').style.display = isRadial ? 'block' : 'none';
         if (isRadial) {
-            document.getElementById('gradientCx').value = (refGrad.cx || 0.5) * 100;
-            document.getElementById('gradientCy').value = (refGrad.cy || 0.5) * 100;
-            document.getElementById('gradientR').value = (refGrad.r || 0.5) * 100;
+            const cx = (refGrad.cx || 0.5) * 100;
+            const cy = (refGrad.cy || 0.5) * 100;
+            const r = (refGrad.r || 0.5) * 100;
+            document.getElementById('gradientCx').value = cx;
+            document.getElementById('gradientCxValue').value = cx;
+            document.getElementById('gradientCy').value = cy;
+            document.getElementById('gradientCyValue').value = cy;
+            document.getElementById('gradientR').value = r;
+            document.getElementById('gradientRValue').value = r;
         } else {
             const angle = Math.atan2(refGrad.y2 - refGrad.y1, refGrad.x2 - refGrad.x1) * 180 / Math.PI;
             document.getElementById('gradientAngle').value = ((angle % 360) + 360) % 360;

@@ -223,11 +223,20 @@
 
                         <div id="radialControls" style="display:none;margin-top:6px;">
                             <label>Center X</label>
-                            <input type="range" id="gradientCx" min="0" max="100" value="50" style="width:100%;">
+                            <div style="display:flex;align-items:center;gap:4px;">
+                                <input type="range" id="gradientCx" min="0" max="100" value="50" style="flex:1;">
+                                <input type="number" id="gradientCxValue" class="spinbox" min="0" max="100" value="50" style="width:48px;">
+                            </div>
                             <label>Center Y</label>
-                            <input type="range" id="gradientCy" min="0" max="100" value="50" style="width:100%;">
+                            <div style="display:flex;align-items:center;gap:4px;">
+                                <input type="range" id="gradientCy" min="0" max="100" value="50" style="flex:1;">
+                                <input type="number" id="gradientCyValue" class="spinbox" min="0" max="100" value="50" style="width:48px;">
+                            </div>
                             <label>Radius</label>
-                            <input type="range" id="gradientR" min="0" max="100" value="50" style="width:100%;">
+                            <div style="display:flex;align-items:center;gap:4px;">
+                                <input type="range" id="gradientR" min="0" max="100" value="50" style="flex:1;">
+                                <input type="number" id="gradientRValue" class="spinbox" min="0" max="100" value="50" style="width:48px;">
+                            </div>
                         </div>
                     </div>
                 </div>
