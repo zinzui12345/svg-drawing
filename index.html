@@ -193,6 +193,44 @@
                         <button class="layer-btn" id="resetRotationBtn" title="Reset Zoom (Ctrl+Shift+[)" style="width:24px;height:24px;font-size:12px;">0</button>
                     </div>
                 </div>
+
+                <div class="fill-controls" id="fillControls" style="margin-top:8px;display:none;">
+                    <label>Fill Type</label>
+                    <select id="fillTypeSelect" style="width:100%;padding:4px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);font-size:11px;">
+                        <option value="solid">Solid</option>
+                        <option value="linear">Linear Gradient</option>
+                        <option value="radial">Radial Gradient</option>
+                    </select>
+
+                    <div id="gradientEditor" style="display:none;margin-top:6px;">
+                        <label>Preview</label>
+                        <canvas id="gradientPreview" width="200" height="20" style="width:100%;height:20px;border-radius:4px;border:1px solid var(--border);"></canvas>
+
+                        <div id="gradientStops" style="margin-top:4px;"></div>
+
+                        <div style="display:flex;gap:4px;margin-top:4px;">
+                            <button class="layer-btn" id="addStopBtn" title="Add Stop" style="width:24px;height:24px;">+</button>
+                            <button class="layer-btn" id="removeStopBtn" title="Remove Stop" style="width:24px;height:24px;">-</button>
+                        </div>
+
+                        <div id="linearControls" style="display:none;margin-top:6px;">
+                            <label>Angle</label>
+                            <div style="display:flex;align-items:center;gap:4px;">
+                                <input type="range" id="gradientAngle" min="0" max="360" value="0" style="flex:1;">
+                                <input type="number" id="gradientAngleValue" class="spinbox" min="0" max="360" value="0" style="width:48px;">
+                            </div>
+                        </div>
+
+                        <div id="radialControls" style="display:none;margin-top:6px;">
+                            <label>Center X</label>
+                            <input type="range" id="gradientCx" min="0" max="100" value="50" style="width:100%;">
+                            <label>Center Y</label>
+                            <input type="range" id="gradientCy" min="0" max="100" value="50" style="width:100%;">
+                            <label>Radius</label>
+                            <input type="range" id="gradientR" min="0" max="100" value="50" style="width:100%;">
+                        </div>
+                    </div>
+                </div>
             </aside>
         </div>
     </div>

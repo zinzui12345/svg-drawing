@@ -268,10 +268,93 @@ class DrawingApp {
                 this.saveState();
                 const activeLayer = this.layers[this.activeLayerIndex];
                 for (const idx of this.selectedIndices) {
-                    activeLayer.vectorCommands[idx].color = newColor;
+                    const cmd = activeLayer.vectorCommands[idx];
+                    if (cmd.fillType && cmd.fillType !== 'solid' && cmd.gradient) {
+                        for (const s of cmd.gradient.stops) s.color = newColor;
+                    }
+                    cmd.color = newColor;
                 }
+                this.rebuildGradientStopsUI();
+                this.renderGradientPreview();
                 this.viewportRender();
             }
+        });
+
+        document.getElementById('fillTypeSelect').addEventListener('change', (e) => {
+            const newType = e.target.value;
+            if (this.selectedIndices.length === 0) return;
+            this.saveState();
+            const activeLayer = this.layers[this.activeLayerIndex];
+            for (const idx of this.selectedIndices) {
+                const cmd = activeLayer.vectorCommands[idx];
+                if (cmd.type !== 'fill') continue;
+                if (newType === 'solid') {
+                    delete cmd.fillType;
+                    delete cmd.gradient;
+                } else {
+                    cmd.fillType = newType;
+                    if (!cmd.gradient) cmd.gradient = this.createDefaultGradient(newType);
+                    cmd.gradient.type = newType === 'radial' ? 'radial' : 'linear';
+                }
+            }
+            this.syncFillTypeToSelection();
+            this.rebuildGradientStopsUI();
+            this.viewportRender();
+        });
+
+        document.getElementById('gradientAngle').addEventListener('input', (e) => {
+            const deg = parseFloat(e.target.value);
+            document.getElementById('gradientAngleValue').value = deg;
+            this.updateGradientControl('angle', deg);
+        });
+        document.getElementById('gradientAngleValue').addEventListener('change', (e) => {
+            const val = Math.max(0, Math.min(360, parseFloat(e.target.value) || 0));
+            document.getElementById('gradientAngle').value = val;
+            document.getElementById('gradientAngleValue').value = val;
+            this.updateGradientControl('angle', val);
+        });
+
+        document.getElementById('gradientCx').addEventListener('input', (e) => {
+            this.updateGradientControl('cx', parseFloat(e.target.value) / 100);
+        });
+        document.getElementById('gradientCy').addEventListener('input', (e) => {
+            this.updateGradientControl('cy', parseFloat(e.target.value) / 100);
+        });
+        document.getElementById('gradientR').addEventListener('input', (e) => {
+            this.updateGradientControl('r', parseFloat(e.target.value) / 100);
+        });
+
+        document.getElementById('addStopBtn').addEventListener('click', () => {
+            if (this.selectedIndices.length === 0) return;
+            this.saveState();
+            const activeLayer = this.layers[this.activeLayerIndex];
+            for (const idx of this.selectedIndices) {
+                const cmd = activeLayer.vectorCommands[idx];
+                if (cmd.type === 'fill' && cmd.gradient) {
+                    const stops = cmd.gradient.stops;
+                    const offset = stops.length > 1 ? (stops[stops.length - 1].offset + stops[0].offset) / 2 : 0.5;
+                    stops.push({ offset, color: '#808080', opacity: 1 });
+                    stops.sort((a, b) => a.offset - b.offset);
+                }
+            }
+            this.rebuildGradientStopsUI();
+            this.renderGradientPreview();
+            this.viewportRender();
+        });
+
+        document.getElementById('removeStopBtn').addEventListener('click', () => {
+            if (this.selectedIndices.length === 0) return;
+            this.saveState();
+            const activeLayer = this.layers[this.activeLayerIndex];
+            for (const idx of this.selectedIndices) {
+                const cmd = activeLayer.vectorCommands[idx];
+                if (cmd.type === 'fill' && cmd.gradient && cmd.gradient.stops.length > 2) {
+                    cmd.gradient.stops.pop();
+                }
+            }
+            this.rebuildGradientStopsUI();
+            this.renderGradientPreview();
+            this.viewportRender();
         });
 
         document.getElementById('undoBtn').addEventListener('click', () => this.undo());
@@ -1012,6 +1095,7 @@ class DrawingApp {
         const hasBrush = this.selectedIndices.some(idx => ['brush', 'fill'].includes(activeLayer.vectorCommands[idx].type));
         this.showPathEditControls(hasBrush);
         this.syncSizeToSelection();
+        this.rebuildGradientStopsUI(this.getSelectedGradient());
         this.viewportRender();
     }
 
@@ -1047,20 +1131,23 @@ class DrawingApp {
     }
 
     syncColorPickerToSelection() {
-        if (this.selectedIndices.length === 0) return;
+        const hasSelection = this.selectedIndices.length > 0;
 
-        const activeLayer = this.layers[this.activeLayerIndex];
-        const colors = new Set();
+        if (hasSelection) {
+            const activeLayer = this.layers[this.activeLayerIndex];
+            const colors = new Set();
 
-        for (const idx of this.selectedIndices) {
-            const cmd = activeLayer.vectorCommands[idx];
-            if (cmd.color) colors.add(cmd.color);
+            for (const idx of this.selectedIndices) {
+                const cmd = activeLayer.vectorCommands[idx];
+                if (cmd.color) colors.add(cmd.color);
+            }
+
+            if (colors.size === 1) {
+                this.brushColor = colors.values().next().value;
+                document.getElementById('colorPicker').value = this.brushColor;
+            }
         }
-
-        if (colors.size === 1) {
-            this.brushColor = colors.values().next().value;
-            document.getElementById('colorPicker').value = this.brushColor;
-        }
+        this.syncFillTypeToSelection();
     }
 
     syncOpacityToSelection() {
@@ -1081,6 +1168,264 @@ class DrawingApp {
             document.getElementById('brushOpacity').value = pct;
             document.getElementById('brushOpacityValue').value = pct;
         }
+    }
+
+    getSelectedGradient() {
+        const activeLayer = this.layers[this.activeLayerIndex];
+        if (!activeLayer) return null;
+        for (const cmd of this.selectedCommands) {
+            if (cmd.type === 'fill' && cmd.gradient) return cmd.gradient;
+        }
+        for (const idx of this.selectedIndices) {
+            const cmd = activeLayer.vectorCommands[idx];
+            if (cmd && cmd.type === 'fill' && cmd.gradient) return cmd.gradient;
+        }
+        return null;
+    }
+
+    syncFillTypeToSelection() {
+        const sel = document.getElementById('fillTypeSelect');
+        const gradEditor = document.getElementById('gradientEditor');
+        const colorPicker = document.getElementById('colorPicker');
+        const fillControls = document.getElementById('fillControls');
+        if (this.selectedIndices.length === 0) {
+            fillControls.style.display = 'none';
+            return;
+        }
+        const activeLayer = this.layers[this.activeLayerIndex];
+        let hasFillCmd = false;
+        const types = new Set();
+        for (const idx of this.selectedIndices) {
+            const cmd = activeLayer.vectorCommands[idx];
+            if (cmd.type === 'fill') {
+                hasFillCmd = true;
+                types.add(cmd.fillType || 'solid');
+            }
+        }
+        if (!hasFillCmd) {
+            fillControls.style.display = 'none';
+            return;
+        }
+        fillControls.style.display = 'block';
+        if (types.size === 1) {
+            const fillType = types.values().next().value;
+            sel.value = fillType;
+            if (fillType === 'solid') {
+                gradEditor.style.display = 'none';
+                colorPicker.style.display = '';
+            } else {
+                gradEditor.style.display = 'block';
+                colorPicker.style.display = 'none';
+            }
+        } else {
+            sel.value = '';
+            gradEditor.style.display = 'none';
+            colorPicker.style.display = '';
+        }
+        const grad = this.getSelectedGradient();
+        this.syncGradientToSelection(grad);
+        this.rebuildGradientStopsUI(grad);
+    }
+
+    syncGradientToSelection(grad) {
+        if (this.selectedIndices.length === 0) return;
+        const refGrad = grad || this.getSelectedGradient();
+        if (!refGrad) return;
+        const isRadial = refGrad.type === 'radial' || document.getElementById('fillTypeSelect').value === 'radial';
+        document.getElementById('linearControls').style.display = isRadial ? 'none' : 'block';
+        document.getElementById('radialControls').style.display = isRadial ? 'block' : 'none';
+        if (isRadial) {
+            document.getElementById('gradientCx').value = (refGrad.cx || 0.5) * 100;
+            document.getElementById('gradientCy').value = (refGrad.cy || 0.5) * 100;
+            document.getElementById('gradientR').value = (refGrad.r || 0.5) * 100;
+        } else {
+            const angle = Math.atan2(refGrad.y2 - refGrad.y1, refGrad.x2 - refGrad.x1) * 180 / Math.PI;
+            document.getElementById('gradientAngle').value = ((angle % 360) + 360) % 360;
+            document.getElementById('gradientAngleValue').value = ((angle % 360) + 360) % 360;
+        }
+        this.rebuildGradientStopsUI(refGrad);
+        this.renderGradientPreview();
+    }
+
+    createDefaultGradient(type) {
+        if (type === 'radial') {
+            return { type: 'radial', cx: 0.5, cy: 0.5, r: 0.5, fx: 0.5, fy: 0.5, stops: [{ offset: 0, color: '#ffffff' }, { offset: 1, color: '#000000' }] };
+        }
+        return { type: 'linear', x1: 0, y1: 0, x2: 1, y2: 0, stops: [{ offset: 0, color: '#ffffff' }, { offset: 1, color: '#000000' }] };
+    }
+
+    updateGradientControl(prop, value) {
+        if (this.selectedIndices.length === 0) return;
+        this.saveState();
+        const activeLayer = this.layers[this.activeLayerIndex];
+        for (const idx of this.selectedIndices) {
+            const cmd = activeLayer.vectorCommands[idx];
+            if (cmd.type !== 'fill' || !cmd.gradient) continue;
+            if (prop === 'angle') {
+                const rad = value * Math.PI / 180;
+                cmd.gradient.x1 = 0.5 - 0.5 * Math.cos(rad);
+                cmd.gradient.y1 = 0.5 - 0.5 * Math.sin(rad);
+                cmd.gradient.x2 = 0.5 + 0.5 * Math.cos(rad);
+                cmd.gradient.y2 = 0.5 + 0.5 * Math.sin(rad);
+            } else {
+                cmd.gradient[prop] = value;
+            }
+        }
+        this.renderGradientPreview();
+        this.viewportRender();
+    }
+
+    hexToRgba(hex, opacity) {
+        hex = hex.replace('#', '');
+        const r = parseInt(hex.substring(0, 2), 16);
+        const g = parseInt(hex.substring(2, 4), 16);
+        const b = parseInt(hex.substring(4, 6), 16);
+        return `rgba(${r},${g},${b},${opacity})`;
+    }
+
+    rebuildGradientStopsUI(grad) {
+        const container = document.getElementById('gradientStops');
+        if (!container) return;
+        const activeLayer = this.layers[this.activeLayerIndex];
+        const gradient = grad || this.getSelectedGradient();
+        if (!gradient) { container.innerHTML = ''; return; }
+        const stops = gradient.stops;
+        container.innerHTML = '';
+        for (let i = 0; i < stops.length; i++) {
+            const s = stops[i];
+            const div = document.createElement('div');
+            div.className = 'gradient-stop';
+            div.dataset.index = i;
+            const colorInput = document.createElement('input');
+            colorInput.type = 'color';
+            colorInput.className = 'stop-color';
+            colorInput.value = s.color;
+            colorInput.addEventListener('input', () => {
+                this.saveState();
+                for (const idx of this.selectedIndices) {
+                    const c = activeLayer.vectorCommands[idx];
+                    if (c.type === 'fill' && c.fillType && c.gradient && c.gradient.stops[i]) {
+                        c.gradient.stops[i].color = colorInput.value;
+                    }
+                }
+                this.renderGradientPreview();
+                this.viewportRender();
+            });
+            const offsetSlider = document.createElement('input');
+            offsetSlider.type = 'range';
+            offsetSlider.className = 'stop-offset';
+            offsetSlider.min = 0; offsetSlider.max = 100; offsetSlider.value = Math.round(s.offset * 100);
+            offsetSlider.addEventListener('input', () => {
+                const val = parseInt(offsetSlider.value) / 100;
+                for (const idx of this.selectedIndices) {
+                    const c = activeLayer.vectorCommands[idx];
+                    if (c.type === 'fill' && c.fillType && c.gradient && c.gradient.stops[i]) {
+                        c.gradient.stops[i].offset = val;
+                    }
+                }
+                offsetVal.value = Math.round(val * 100);
+                this.rebuildGradientStopsUI();
+                this.renderGradientPreview();
+                this.viewportRender();
+            });
+            const offsetVal = document.createElement('input');
+            offsetVal.type = 'number';
+            offsetVal.className = 'stop-offset-value spinbox';
+            offsetVal.min = 0; offsetVal.max = 100; offsetVal.value = Math.round(s.offset * 100);
+            offsetVal.addEventListener('change', () => {
+                const val = Math.max(0, Math.min(100, parseInt(offsetVal.value) || 0)) / 100;
+                for (const idx of this.selectedIndices) {
+                    const c = activeLayer.vectorCommands[idx];
+                    if (c.type === 'fill' && c.fillType && c.gradient && c.gradient.stops[i]) {
+                        c.gradient.stops[i].offset = val;
+                    }
+                }
+                this.rebuildGradientStopsUI();
+                this.renderGradientPreview();
+                this.viewportRender();
+            });
+            const opacitySlider = document.createElement('input');
+            opacitySlider.type = 'range';
+            opacitySlider.className = 'stop-opacity';
+            opacitySlider.min = 0; opacitySlider.max = 100; opacitySlider.value = Math.round((s.opacity !== undefined ? s.opacity : 1) * 100);
+            opacitySlider.addEventListener('input', () => {
+                const val = parseInt(opacitySlider.value) / 100;
+                for (const idx of this.selectedIndices) {
+                    const c = activeLayer.vectorCommands[idx];
+                    if (c.type === 'fill' && c.fillType && c.gradient && c.gradient.stops[i]) {
+                        c.gradient.stops[i].opacity = val;
+                    }
+                }
+                opacityVal.value = Math.round(val * 100);
+                this.renderGradientPreview();
+                this.viewportRender();
+            });
+            const opacityVal = document.createElement('input');
+            opacityVal.type = 'number';
+            opacityVal.className = 'stop-opacity-value spinbox';
+            opacityVal.min = 0; opacityVal.max = 100; opacityVal.value = Math.round((s.opacity !== undefined ? s.opacity : 1) * 100);
+            opacityVal.addEventListener('change', () => {
+                const val = Math.max(0, Math.min(100, parseInt(opacityVal.value) || 100)) / 100;
+                for (const idx of this.selectedIndices) {
+                    const c = activeLayer.vectorCommands[idx];
+                    if (c.type === 'fill' && c.fillType && c.gradient && c.gradient.stops[i]) {
+                        c.gradient.stops[i].opacity = val;
+                    }
+                }
+                this.renderGradientPreview();
+                this.viewportRender();
+            });
+            const row1 = document.createElement('div');
+            row1.style.display = 'flex';
+            row1.style.alignItems = 'center';
+            row1.style.gap = '4px';
+            row1.style.marginBottom = '2px';
+            row1.appendChild(colorInput);
+            row1.appendChild(offsetSlider);
+            row1.appendChild(offsetVal);
+            const row2 = document.createElement('div');
+            row2.style.display = 'flex';
+            row2.style.alignItems = 'center';
+            row2.style.gap = '4px';
+            const opacityLabel = document.createElement('span');
+            opacityLabel.textContent = 'α';
+            opacityLabel.style.width = '24px';
+            opacityLabel.style.textAlign = 'center';
+            opacityLabel.style.fontSize = '11px';
+            opacityLabel.style.color = 'var(--text-secondary)';
+            row2.appendChild(opacityLabel);
+            row2.appendChild(opacitySlider);
+            row2.appendChild(opacityVal);
+            div.appendChild(row1);
+            div.appendChild(row2);
+            container.appendChild(div);
+        }
+    }
+
+    renderGradientPreview() {
+        const canvas = document.getElementById('gradientPreview');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+        const grad = this.getSelectedGradient();
+        if (!grad || !grad.stops || grad.stops.length === 0) {
+            ctx.fillStyle = '#ccc';
+            ctx.fillRect(0, 0, w, h);
+            return;
+        }
+        let g;
+        if (grad.type === 'radial') {
+            g = ctx.createRadialGradient(w * (grad.cx || 0.5), h * (grad.cy || 0.5), 0, w * (grad.cx || 0.5), h * (grad.cy || 0.5), w * (grad.r || 0.5));
+        } else {
+            g = ctx.createLinearGradient(0, 0, w, 0);
+        }
+        for (const s of grad.stops) {
+            g.addColorStop(s.offset, this.hexToRgba(s.color, s.opacity !== undefined ? s.opacity : 1));
+        }
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, w, h);
     }
 
     handleSelectMouseMove(e, coords) {
@@ -1143,6 +1488,7 @@ class DrawingApp {
                 this.syncColorPickerToSelection();
                 this.syncOpacityToSelection();
                 this.syncSizeToSelection();
+                this.rebuildGradientStopsUI(this.getSelectedGradient());
                 this.viewportRender();
             }
         } else if (this.selectMode === 'move' || this.selectMode === 'resize') {
@@ -1514,6 +1860,8 @@ class DrawingApp {
         this.resizeStartLocalDims = null;
         this.selectionRotation = 0;
         this.updateDeleteButton();
+        this.syncColorPickerToSelection();
+        this.syncFillTypeToSelection();
         this.viewportRender();
     }
 
@@ -1721,6 +2069,10 @@ class DrawingApp {
             }
             for (let i = 1; i < cmd.points.length; i++) {
                 if (this.distToSegment(mx, my, cmd.points[i - 1].x, cmd.points[i - 1].y, cmd.points[i].x, cmd.points[i].y) < hitRadius) return true;
+            }
+            if (cmd.closed && cmd.points.length >= 2) {
+                const last = cmd.points.length - 1;
+                if (this.distToSegment(mx, my, cmd.points[last].x, cmd.points[last].y, cmd.points[0].x, cmd.points[0].y) < hitRadius) return true;
             }
             return false;
         } else if (cmd.type === 'fill') {
@@ -2163,7 +2515,6 @@ class DrawingApp {
                 ctx.stroke();
             }
         } else if (cmd.type === 'fill') {
-            ctx.fillStyle = cmd.color;
             ctx.beginPath();
             const pts = cmd.points;
             const drawContour = (contour) => {
@@ -2188,6 +2539,7 @@ class DrawingApp {
                     for (const hole of pts.holes) drawContour(hole);
                 }
             }
+            ctx.fillStyle = this.getFillStyle(ctx, cmd);
             ctx.fill('evenodd');
         } else if (cmd.type === 'line') {
             ctx.strokeStyle = cmd.color;
@@ -2224,6 +2576,44 @@ class DrawingApp {
                 }
             }
         }
+    }
+
+    getFillPointsBounds(cmd) {
+        const pts = cmd.points;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        const iter = (arr) => { for (const p of arr) { if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y; if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y; } };
+        if (Array.isArray(pts)) iter(pts);
+        else { if (pts.outer) iter(pts.outer); if (pts.holes) for (const h of pts.holes) iter(h); }
+        return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+    }
+
+    getFillStyle(ctx, cmd) {
+        if (cmd.fillType === 'linear' && cmd.gradient && cmd.gradient.stops && cmd.gradient.stops.length >= 1) {
+            const b = this.getFillPointsBounds(cmd);
+            if (b.w <= 0 || b.h <= 0) return cmd.color || '#000';
+            const g = cmd.gradient;
+            const x1 = b.x + (g.x1 || 0) * b.w, y1 = b.y + (g.y1 || 0) * b.h;
+            const x2 = b.x + (g.x2 || 1) * b.w, y2 = b.y + (g.y2 || 0) * b.h;
+            try {
+                const cg = ctx.createLinearGradient(x1, y1, x2, y2);
+                for (const s of g.stops) cg.addColorStop(s.offset, this.hexToRgba(s.color, s.opacity !== undefined ? s.opacity : 1));
+                return cg;
+            } catch (e) { return cmd.color || '#000'; }
+        } else if (cmd.fillType === 'radial' && cmd.gradient && cmd.gradient.stops && cmd.gradient.stops.length >= 1) {
+            const b = this.getFillPointsBounds(cmd);
+            if (b.w <= 0 || b.h <= 0) return cmd.color || '#000';
+            const g = cmd.gradient;
+            const cx = b.x + (g.cx || 0.5) * b.w, cy = b.y + (g.cy || 0.5) * b.h;
+            const r = (g.r || 0.5) * Math.max(b.w, b.h) / 2;
+            const fx = g.fx !== undefined ? b.x + g.fx * b.w : cx;
+            const fy = g.fy !== undefined ? b.y + g.fy * b.h : cy;
+            try {
+                const cg = ctx.createRadialGradient(fx, fy, 0, cx, cy, Math.max(r, 0.1));
+                for (const s of g.stops) cg.addColorStop(s.offset, this.hexToRgba(s.color, s.opacity !== undefined ? s.opacity : 1));
+                return cg;
+            } catch (e) { return cmd.color || '#000'; }
+        }
+        return cmd.color || '#000';
     }
 
     dist(x1, y1, x2, y2) {
@@ -3202,6 +3592,7 @@ class DrawingApp {
                     document.getElementById('layerOpacity').value = Math.round(layer.opacity * 100);
                     document.getElementById('layerOpacityValue').value = Math.round(layer.opacity * 100);
                     document.getElementById('layerBlendMode').value = layer.blendMode;
+                    this.syncColorPickerToSelection();
                     this.viewportRender();
                 }
             });
@@ -3300,6 +3691,35 @@ class DrawingApp {
         svgParts.push(`<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" viewBox="0 0 ${this.canvasWidth} ${this.canvasHeight}" width="${this.canvasWidth}" height="${this.canvasHeight}">`);
         svgParts.push(`  <rect width="${this.canvasWidth}" height="${this.canvasHeight}" fill="#ffffff"/>`);
 
+        const gradientMap = new Map();
+        let gradCounter = 0;
+        for (const layer of this.layers) {
+            for (const cmd of (layer.vectorCommands || [])) {
+                if (cmd.type === 'fill' && cmd.fillType && cmd.gradient && cmd.gradient.stops) {
+                    const key = JSON.stringify(cmd.gradient);
+                    if (!gradientMap.has(key)) {
+                        gradCounter++;
+                        gradientMap.set(key, `grad_${gradCounter}`);
+                    }
+                }
+            }
+        }
+        if (gradientMap.size > 0) {
+            svgParts.push(`  <defs>`);
+            for (const [key, id] of gradientMap) {
+                const g = JSON.parse(key);
+                const stopsStr = g.stops.map(s => `      <stop offset="${(s.offset * 100).toFixed(2)}%" stop-color="${s.color}" stop-opacity="${s.opacity !== undefined ? s.opacity : 1}"/>`).join('\n');
+                if (g.type === 'radial') {
+                    svgParts.push(`    <radialGradient id="${id}" cx="${g.cx !== undefined ? g.cx : 0.5}" cy="${g.cy !== undefined ? g.cy : 0.5}" r="${g.r !== undefined ? g.r : 0.5}" fx="${g.fx !== undefined ? g.fx : 0.5}" fy="${g.fy !== undefined ? g.fy : 0.5}">`);
+                } else {
+                    svgParts.push(`    <linearGradient id="${id}" x1="${g.x1 !== undefined ? g.x1 : 0}" y1="${g.y1 !== undefined ? g.y1 : 0}" x2="${g.x2 !== undefined ? g.x2 : 1}" y2="${g.y2 !== undefined ? g.y2 : 0}">`);
+                }
+                svgParts.push(stopsStr);
+                svgParts.push(`    </${g.type === 'radial' ? 'radialGradient' : 'linearGradient'}>`);
+            }
+            svgParts.push(`  </defs>`);
+        }
+
         for (let li = this.layers.length - 1; li >= 0; li--) {
             const layer = this.layers[li];
 
@@ -3362,7 +3782,12 @@ class DrawingApp {
                                 for (const hole of pts.holes) d += ' ' + contourToD(hole);
                             }
                         }
-                        svgParts.push(`    <path d="${d}" fill="${cmd.color}" stroke="none" opacity="${cmd.opacity}" fill-rule="evenodd"/>`);
+                        let fillAttr = cmd.color;
+                        if (cmd.fillType && cmd.gradient) {
+                            const key = JSON.stringify(cmd.gradient);
+                            if (gradientMap.has(key)) fillAttr = `url(#${gradientMap.get(key)})`;
+                        }
+                        svgParts.push(`    <path d="${d}" fill="${fillAttr}" stroke="none" opacity="${cmd.opacity}" fill-rule="evenodd"/>`);
                     } else if (cmd.type === 'line') {
                         svgParts.push(`    <line x1="${cmd.x1.toFixed(2)}" y1="${cmd.y1.toFixed(2)}" x2="${cmd.x2.toFixed(2)}" y2="${cmd.y2.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="round" opacity="${cmd.opacity}"/>`);
                     } else if (cmd.type === 'rect') {
@@ -3556,6 +3981,8 @@ class DrawingApp {
         const scaleX = this.canvasWidth / vbW;
         const scaleY = this.canvasHeight / vbH;
 
+        const svgGradients = this.parseSVGGradients(svg);
+
         this.clearAllLayers();
 
         const layerGroups = this.extractLayers(svg);
@@ -3563,7 +3990,7 @@ class DrawingApp {
             for (let i = 0; i < layerGroups.length; i++) {
                 const { name, elements, groupEl } = layerGroups[i];
                 this.addLayer(name);
-                this.parseSVGElements(elements, this.layers[0].vectorCommands, scaleX, scaleY, vbX, vbY);
+                this.parseSVGElements(elements, this.layers[0].vectorCommands, scaleX, scaleY, vbX, vbY, svgGradients);
                 if (groupEl) {
                     const style = groupEl.getAttribute('style') || '';
                     const match = style.match(/mix-blend-mode:\s*([\w-]+)/);
@@ -3596,7 +4023,7 @@ class DrawingApp {
         } else {
             this.addLayer('Imported SVG');
             const allElements = svg.children;
-            this.parseSVGElements(allElements, this.layers[0].vectorCommands, scaleX, scaleY, vbX, vbY);
+            this.parseSVGElements(allElements, this.layers[0].vectorCommands, scaleX, scaleY, vbX, vbY, svgGradients);
         }
 
         this.viewportRender();
@@ -3698,20 +4125,132 @@ class DrawingApp {
         return layers;
     }
 
-    parseSVGElements(elements, commands, scaleX, scaleY, vbX, vbY) {
+    resolveFillValue(fill, svgGradients) {
+        if (!fill || fill === 'none') return null;
+        if (fill.startsWith('url(#')) {
+            const id = fill.slice(5, -1);
+            const g = svgGradients ? svgGradients[id] : null;
+            if (g) return { isGradient: true, gradient: g };
+        }
+        return { isGradient: false, color: fill };
+    }
+
+    parseSVGGradients(svg) {
+        const gradients = {};
+        const defs = svg.querySelector('defs');
+        if (!defs) return gradients;
+        const raw = [];
+        for (const el of defs.children) {
+            const tag = el.tagName.toLowerCase();
+            if (tag === 'lineargradient' || tag === 'radialgradient') {
+                raw.push(el);
+            }
+        }
+        const resolveHref = (el, visited) => {
+            const href = el.getAttribute('href') || el.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
+            if (!href || !href.startsWith('#')) return null;
+            const id = href.slice(1);
+            if (visited.has(id)) return null;
+            visited.add(id);
+            const target = raw.find(e => e.getAttribute('id') === id);
+            if (!target) return null;
+            return target;
+        };
+        for (const el of raw) {
+            const tag = el.tagName.toLowerCase();
+            if (tag === 'lineargradient' || tag === 'radialgradient') {
+                const id = el.getAttribute('id');
+                if (!id) continue;
+                let stops = [];
+                for (const child of el.children) {
+                    if (child.tagName.toLowerCase() === 'stop') {
+                        const offStr = child.getAttribute('offset');
+                        let offset = parseFloat(offStr);
+                        if (offStr && offStr.endsWith('%')) offset = parseFloat(offStr) / 100;
+                        const style = child.getAttribute('style') || '';
+                        let color = child.getAttribute('stop-color');
+                        if (!color) {
+                            const m = style.match(/stop-color\s*:\s*([^;]+)/);
+                            if (m) color = m[1].trim();
+                        }
+                        if (!color) color = '#000';
+                        let stopOpacity = parseFloat(child.getAttribute('stop-opacity'));
+                        if (isNaN(stopOpacity)) {
+                            const m = style.match(/stop-opacity\s*:\s*([^;]+)/);
+                            if (m) stopOpacity = parseFloat(m[1].trim());
+                        }
+                        stops.push({ offset: isNaN(offset) ? 0 : offset, color, opacity: isNaN(stopOpacity) ? 1 : stopOpacity });
+                    }
+                }
+                if (stops.length === 0) {
+                    const src = resolveHref(el, new Set());
+                    if (src) {
+                        const srcId = src.getAttribute('id');
+                        if (srcId && gradients[srcId]) stops = [...gradients[srcId].stops];
+                    }
+                }
+                if (stops.length === 0) continue;
+                stops.sort((a, b) => a.offset - b.offset);
+                const units = el.getAttribute('gradientUnits');
+                const isUserSpace = units === 'userSpaceOnUse';
+                if (tag === 'lineargradient') {
+                    let x1 = parseFloat(el.getAttribute('x1') || '0');
+                    let y1 = parseFloat(el.getAttribute('y1') || '0');
+                    let x2 = parseFloat(el.getAttribute('x2') || '1');
+                    let y2 = parseFloat(el.getAttribute('y2') || '0');
+                    if (isUserSpace) {
+                        const svg = el.closest('svg');
+                        const vb = svg ? (svg.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number) : null;
+                        if (vb && vb.length === 4) { x1 = (x1 - vb[0]) / vb[2]; y1 = (y1 - vb[1]) / vb[3]; x2 = (x2 - vb[0]) / vb[2]; y2 = (y2 - vb[1]) / vb[3]; }
+                        else { const w = parseFloat(svg?.getAttribute('width') || 100) || 100, h = parseFloat(svg?.getAttribute('height') || 100) || 100; x1 /= w; y1 /= h; x2 /= w; y2 /= h; }
+                    }
+                    gradients[id] = {
+                        type: 'linear',
+                        x1, y1, x2, y2,
+                        stops
+                    };
+                } else {
+                    let cx = parseFloat(el.getAttribute('cx') || '0.5');
+                    let cy = parseFloat(el.getAttribute('cy') || '0.5');
+                    let r = parseFloat(el.getAttribute('r') || '0.5');
+                    let fx = parseFloat(el.getAttribute('fx') || el.getAttribute('cx') || '0.5');
+                    let fy = parseFloat(el.getAttribute('fy') || el.getAttribute('cy') || '0.5');
+                    if (isUserSpace) {
+                        const svg = el.closest('svg');
+                        const vb = svg ? (svg.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number) : null;
+                        if (vb && vb.length === 4) { cx = (cx - vb[0]) / vb[2]; cy = (cy - vb[1]) / vb[3]; r /= Math.max(vb[2], vb[3]); fx = (fx - vb[0]) / vb[2]; fy = (fy - vb[1]) / vb[3]; }
+                        else { const w = parseFloat(svg?.getAttribute('width') || 100) || 100, h = parseFloat(svg?.getAttribute('height') || 100) || 100; cx /= w; cy /= h; r /= Math.max(w, h); fx /= w; fy /= h; }
+                    }
+                    gradients[id] = {
+                        type: 'radial',
+                        cx, cy, r, fx, fy,
+                        stops
+                    };
+                }
+            }
+        }
+        return gradients;
+    }
+
+    parseSVGElements(elements, commands, scaleX, scaleY, vbX, vbY, svgGradients) {
         for (const el of elements) {
             const tag = el.tagName.toLowerCase();
 
             if (tag === 'g') {
-                this.parseSVGElements(el.children, commands, scaleX, scaleY, vbX, vbY);
+                this.parseSVGElements(el.children, commands, scaleX, scaleY, vbX, vbY, svgGradients);
                 continue;
             }
+            if (tag === 'defs' || tag === 'lineargradient' || tag === 'radialgradient') continue;
 
             const opacity = parseFloat(el.getAttribute('opacity')) || 1;
             const style = el.getAttribute('style') || '';
             const stroke = this.getStyleValue(el, 'stroke', style);
             const fill = this.getStyleValue(el, 'fill', style);
             const strokeWidth = parseFloat(this.getStyleValue(el, 'stroke-width', style)) || 2;
+
+            const fillInfo = this.resolveFillValue(fill, svgGradients);
+            const hasFill = !!fillInfo;
+            const hasStroke = stroke && stroke !== 'none';
 
             if (tag === 'rect') {
                 const xAttr = el.getAttribute('x');
@@ -3733,12 +4272,10 @@ class DrawingApp {
                 const y = (parseFloat(yAttr || '0') - vbY) * scaleY;
                 const w = parseFloat(wAttr || '0') * scaleX;
                 const h = parseFloat(el.getAttribute('height') || '0') * scaleY;
-                const hasRectFill = fill && fill !== 'none';
-                const hasRectStroke = stroke && stroke !== 'none';
-                if (hasRectFill) {
-                    commands.push({
+                if (hasFill) {
+                    const fillCmd = {
                         type: 'fill',
-                        color: fill,
+                        color: fillInfo.isGradient ? fillInfo.gradient.stops[fillInfo.gradient.stops.length - 1].color : fillInfo.color,
                         opacity,
                         points: [
                             { x, y },
@@ -3746,16 +4283,21 @@ class DrawingApp {
                             { x: x + w, y: y + h },
                             { x, y: y + h }
                         ]
-                    });
+                    };
+                    if (fillInfo.isGradient) {
+                        fillCmd.fillType = fillInfo.gradient.type === 'radial' ? 'radial' : 'linear';
+                        fillCmd.gradient = fillInfo.gradient;
+                    }
+                    commands.push(fillCmd);
                 }
                 const rectPts = [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
-                if (hasRectStroke) {
+                if (hasStroke) {
                     commands.push({
                         type: 'brush', color: stroke, size: strokeWidth * (scaleX + scaleY) / 2,
                         opacity, points: rectPts, closed: true
                     });
                 }
-                if (!hasRectFill && !hasRectStroke) {
+                if (!hasFill && !hasStroke) {
                     commands.push({
                         type: 'brush', color: '#000000', size: strokeWidth * (scaleX + scaleY) / 2,
                         opacity, points: rectPts, closed: true
@@ -3765,30 +4307,34 @@ class DrawingApp {
                 const cx = (parseFloat(el.getAttribute('cx') || '0') - vbX) * scaleX;
                 const cy = (parseFloat(el.getAttribute('cy') || '0') - vbY) * scaleY;
                 const r = parseFloat(el.getAttribute('r') || '0') * scaleX;
-                const hasCircleFill = fill && fill !== 'none';
-                const hasCircleStroke = stroke && stroke !== 'none';
-                if (hasCircleFill) {
+                if (hasFill) {
                     const fillPoints = [];
                     for (let i = 0; i < 36; i++) {
                         const a = (i / 36) * Math.PI * 2;
                         fillPoints.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
                     }
-                    commands.push({
-                        type: 'fill', color: fill, opacity, points: fillPoints
-                    });
+                    const fillCmd = {
+                        type: 'fill', color: fillInfo.isGradient ? fillInfo.gradient.stops[fillInfo.gradient.stops.length - 1].color : fillInfo.color,
+                        opacity, points: fillPoints
+                    };
+                    if (fillInfo.isGradient) {
+                        fillCmd.fillType = fillInfo.gradient.type === 'radial' ? 'radial' : 'linear';
+                        fillCmd.gradient = fillInfo.gradient;
+                    }
+                    commands.push(fillCmd);
                 }
                 const circlePts = [];
                 for (let i = 0; i < 36; i++) {
                     const a = (i / 36) * Math.PI * 2;
                     circlePts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
                 }
-                if (hasCircleStroke) {
+                if (hasStroke) {
                     commands.push({
                         type: 'brush', color: stroke, size: strokeWidth * (scaleX + scaleY) / 2,
                         opacity, points: circlePts, closed: true
                     });
                 }
-                if (!hasCircleFill && !hasCircleStroke) {
+                if (!hasFill && !hasStroke) {
                     commands.push({
                         type: 'brush', color: '#000000', size: strokeWidth * (scaleX + scaleY) / 2,
                         opacity, points: circlePts, closed: true
@@ -3799,30 +4345,34 @@ class DrawingApp {
                 const cy = (parseFloat(el.getAttribute('cy') || '0') - vbY) * scaleY;
                 const rx = parseFloat(el.getAttribute('rx') || '0') * scaleX;
                 const ry = parseFloat(el.getAttribute('ry') || '0') * scaleY;
-                const hasEllipseFill = fill && fill !== 'none';
-                const hasEllipseStroke = stroke && stroke !== 'none';
-                if (hasEllipseFill) {
+                if (hasFill) {
                     const fillPoints = [];
                     for (let i = 0; i < 36; i++) {
                         const a = (i / 36) * Math.PI * 2;
                         fillPoints.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
                     }
-                    commands.push({
-                        type: 'fill', color: fill, opacity, points: fillPoints
-                    });
+                    const fillCmd = {
+                        type: 'fill', color: fillInfo.isGradient ? fillInfo.gradient.stops[fillInfo.gradient.stops.length - 1].color : fillInfo.color,
+                        opacity, points: fillPoints
+                    };
+                    if (fillInfo.isGradient) {
+                        fillCmd.fillType = fillInfo.gradient.type === 'radial' ? 'radial' : 'linear';
+                        fillCmd.gradient = fillInfo.gradient;
+                    }
+                    commands.push(fillCmd);
                 }
                 const ellipsePts = [];
                 for (let i = 0; i < 36; i++) {
                     const a = (i / 36) * Math.PI * 2;
                     ellipsePts.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
                 }
-                if (hasEllipseStroke) {
+                if (hasStroke) {
                     commands.push({
                         type: 'brush', color: stroke, size: strokeWidth * (scaleX + scaleY) / 2,
                         opacity, points: ellipsePts, closed: true
                     });
                 }
-                if (!hasEllipseFill && !hasEllipseStroke) {
+                if (!hasFill && !hasStroke) {
                     commands.push({
                         type: 'brush', color: '#000000', size: strokeWidth * (scaleX + scaleY) / 2,
                         opacity, points: ellipsePts, closed: true
@@ -3868,16 +4418,20 @@ class DrawingApp {
                 const d = el.getAttribute('d');
                 if (d) {
                     const points = this.parsePathD(d, scaleX, scaleY, vbX, vbY);
+                    const isClosedPath = /[Zz]/.test(d);
                     if (points.length > 0) {
-                        const hasFill = fill && fill !== 'none';
-                        const hasStroke = stroke && stroke !== 'none';
                         if (hasFill) {
-                            commands.push({
+                            const fillCmd = {
                                 type: 'fill',
-                                color: fill,
+                                color: fillInfo.isGradient ? fillInfo.gradient.stops[fillInfo.gradient.stops.length - 1].color : fillInfo.color,
                                 opacity,
                                 points: [...points]
-                            });
+                            };
+                            if (fillInfo.isGradient) {
+                                fillCmd.fillType = fillInfo.gradient.type === 'radial' ? 'radial' : 'linear';
+                                fillCmd.gradient = fillInfo.gradient;
+                            }
+                            commands.push(fillCmd);
                         }
                         if (hasStroke) {
                             commands.push({
@@ -3885,7 +4439,8 @@ class DrawingApp {
                                 color: stroke,
                                 size: strokeWidth * (scaleX + scaleY) / 2,
                                 opacity,
-                                points: [...points]
+                                points: [...points],
+                                closed: isClosedPath
                             });
                         }
                         if (!hasFill && !hasStroke) {
@@ -3894,7 +4449,8 @@ class DrawingApp {
                                 color: '#000000',
                                 size: strokeWidth * (scaleX + scaleY) / 2,
                                 opacity,
-                                points
+                                points,
+                                closed: isClosedPath
                             });
                         }
                     }
@@ -3914,23 +4470,28 @@ class DrawingApp {
                         if (tag === 'polygon') {
                             parsedPoints.push({ ...parsedPoints[0] });
                         }
-                        const hasFill = fill && fill !== 'none';
-                        const hasStroke = stroke && stroke !== 'none';
                         if (hasFill) {
-                            commands.push({
+                            const fillCmd = {
                                 type: 'fill',
-                                color: fill,
+                                color: fillInfo.isGradient ? fillInfo.gradient.stops[fillInfo.gradient.stops.length - 1].color : fillInfo.color,
                                 opacity,
                                 points: [...parsedPoints]
-                            });
+                            };
+                            if (fillInfo.isGradient) {
+                                fillCmd.fillType = fillInfo.gradient.type === 'radial' ? 'radial' : 'linear';
+                                fillCmd.gradient = fillInfo.gradient;
+                            }
+                            commands.push(fillCmd);
                         }
+                        const isPolygon = tag === 'polygon';
                         if (hasStroke) {
                             commands.push({
                                 type: 'brush',
                                 color: stroke,
                                 size: strokeWidth * (scaleX + scaleY) / 2,
                                 opacity,
-                                points: [...parsedPoints]
+                                points: [...parsedPoints],
+                                closed: isPolygon
                             });
                         }
                         if (!hasFill && !hasStroke) {
@@ -3939,7 +4500,8 @@ class DrawingApp {
                                 color: '#000000',
                                 size: strokeWidth * (scaleX + scaleY) / 2,
                                 opacity,
-                                points: parsedPoints
+                                points: parsedPoints,
+                                closed: isPolygon
                             });
                         }
                     }
@@ -4434,6 +4996,11 @@ class DrawingApp {
         this.selectedCommands = this.selectedIndices.map(i => cmds[i]);
         this.updateSelectionBBox();
         this.updateDeleteButton();
+        this.syncColorPickerToSelection();
+        this.syncOpacityToSelection();
+        const hasBrush = this.selectedIndices.some(idx => ['brush', 'fill'].includes(activeLayer.vectorCommands[idx].type));
+        this.showPathEditControls(hasBrush);
+        this.syncSizeToSelection();
         this.viewportRender();
     }
 
@@ -4951,11 +5518,10 @@ class DrawingApp {
         const pointLineWidth = (2.5 + 2.5 * t) / (baseScale * z);
         const dashLen = (4 + 4 * t) / (baseScale * z);
 
-        const isClosed = this.editingPathCmd.type === 'fill';
+        const isClosed = this.editingPathCmd.type === 'fill' || this.editingPathCmd.closed;
 
         for (let i = 0; i < points.length; i++) {
             const p = points[i];
-
             if (i < points.length - 1) {
                 const next = points[i + 1];
                 ctx.strokeStyle = '#4a9eff';
@@ -4964,29 +5530,34 @@ class DrawingApp {
                 ctx.beginPath();
                 ctx.moveTo(p.x, p.y);
                 if (p.cp2x !== undefined && next.cp1x !== undefined) {
-                    ctx.lineTo(p.cp2x, p.cp2y);
-                    ctx.moveTo(next.cp1x, next.cp1y);
+                    ctx.bezierCurveTo(p.cp2x, p.cp2y, next.cp1x, next.cp1y, next.x, next.y);
+                } else {
+                    ctx.lineTo(next.x, next.y);
                 }
-                ctx.lineTo(next.x, next.y);
                 ctx.stroke();
                 ctx.setLineDash([]);
             }
+        }
 
-            if (isClosed && i === points.length - 1) {
-                const first = points[0];
-                ctx.strokeStyle = '#4a9eff';
-                ctx.lineWidth = pathLineWidth;
-                ctx.setLineDash([dashLen, dashLen]);
-                ctx.beginPath();
-                ctx.moveTo(p.x, p.y);
-                if (p.cp2x !== undefined && first.cp1x !== undefined) {
-                    ctx.lineTo(p.cp2x, p.cp2y);
-                    ctx.moveTo(first.cp1x, first.cp1y);
-                }
+        if (isClosed && points.length >= 2) {
+            const last = points[points.length - 1];
+            const first = points[0];
+            ctx.strokeStyle = '#4a9eff';
+            ctx.lineWidth = pathLineWidth;
+            ctx.setLineDash([dashLen, dashLen]);
+            ctx.beginPath();
+            ctx.moveTo(last.x, last.y);
+            if (last.cp2x !== undefined && first.cp1x !== undefined) {
+                ctx.bezierCurveTo(last.cp2x, last.cp2y, first.cp1x, first.cp1y, first.x, first.y);
+            } else {
                 ctx.lineTo(first.x, first.y);
-                ctx.stroke();
-                ctx.setLineDash([]);
             }
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        for (let i = 0; i < points.length; i++) {
+            const p = points[i];
 
             if (p.cp1x !== undefined) {
                 const isHovered = this.hoveredHandle && this.hoveredHandle.pointIndex === i && this.hoveredHandle.type === 'cp1';

@@ -330,6 +330,50 @@ input.spinbox:focus {
     font-size: 14px;
 }
 
+/* Gradient Editor */
+.fill-controls label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+.gradient-stop {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 4px;
+    padding: 4px;
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+}
+.gradient-stop .stop-color {
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+}
+.gradient-stop .stop-offset {
+    flex: 1;
+    height: 4px;
+}
+.gradient-stop .stop-offset-value {
+    width: 36px;
+    height: 20px;
+    font-size: 10px;
+}
+.gradient-stop .stop-opacity {
+    flex: 1;
+    height: 4px;
+}
+.gradient-stop .stop-opacity-value {
+    width: 36px;
+    height: 20px;
+    font-size: 10px;
+}
+
 ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
