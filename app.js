@@ -472,6 +472,32 @@ class DrawingApp {
             this.setLayerBlendMode(this.activeLayerIndex, e.target.value);
         });
 
+        // Middle-click scroll for layer list
+        (() => {
+            const layerList = document.getElementById('layerList');
+            let isScrolling = false;
+            let startY = 0;
+            let startScrollTop = 0;
+            layerList.addEventListener('mousedown', (e) => {
+                if (e.button !== 1) return;
+                e.preventDefault();
+                isScrolling = true;
+                startY = e.clientY;
+                startScrollTop = layerList.scrollTop;
+                const onMove = (ev) => {
+                    if (!isScrolling) return;
+                    layerList.scrollTop = startScrollTop + (startY - ev.clientY);
+                };
+                const onUp = () => {
+                    isScrolling = false;
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                };
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+            });
+        })();
+
         document.getElementById('pathEditBtn').addEventListener('click', () => this.togglePathEdit());
         document.getElementById('addPointBtn').addEventListener('click', () => this.toggleAddPointMode());
         document.getElementById('deletePointBtn').addEventListener('click', () => this.deleteSelectedPoint());
