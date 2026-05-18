@@ -5209,6 +5209,14 @@ class DrawingApp {
     handleKeyboard(e) {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
 
+        if (e.key === 'A' && e.shiftKey && (e.ctrlKey || e.metaKey)) {
+            if (this.currentTool === 'select' && this.selectedIndices.length > 0) {
+                e.preventDefault();
+                this.clearSelection();
+            }
+            return;
+        }
+
         if (e.key === 'F2') {
             e.preventDefault();
             this.renameActiveLayer();
@@ -5277,6 +5285,11 @@ class DrawingApp {
             if (this.pathEditMode) {
                 e.preventDefault();
                 this.togglePathEdit();
+                return;
+            }
+            if (this.currentTool === 'select' && this.selectedIndices.length > 0) {
+                e.preventDefault();
+                this.clearSelection();
             }
             return;
         }
