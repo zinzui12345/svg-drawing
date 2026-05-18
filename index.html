@@ -93,25 +93,11 @@
                     <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></svg>
                 </button>
             </div>
-            <div class="tool-group" id="sizeToolGroup">
-                <label class="tool-label">Size</label>
-                <input type="range" id="brushSize" min="1" max="100" value="10">
-                <input type="number" id="brushSizeValue" class="spinbox" min="1" max="100" value="10">
-            </div>
-            <div class="tool-group" id="expandToolGroup" style="display:none;">
-                <label class="tool-label">Expand</label>
-                <input type="range" id="expandOffset" min="0" max="20" value="2" step="0.5">
-                <input type="number" id="expandOffsetValue" class="spinbox" min="0" max="20" value="2" step="0.5">
-            </div>
+            
             <div class="tool-group">
-                <label class="tool-label">Opacity</label>
-                <input type="range" id="brushOpacity" min="1" max="100" value="100">
-                <input type="number" id="brushOpacityValue" class="spinbox" min="1" max="100" value="100" style="width:48px;text-align:right;">
-            </div>
-
-            <div class="tool-group">
-                <label class="tool-label">Color</label>
+                <!-- <label class="tool-label">Color</label> -->
                 <input type="color" id="colorPicker" value="#000000">
+
                 <button class="tool-btn" id="toolFill" data-tool="fill" title="Fill (F)">
                     <svg viewBox="0 0 24 24"><path d="M16.56 8.94L7.62 0 6.21 1.41l2.38 2.38-5.15 5.15c-.59.59-.59 1.54 0 2.12l5.5 5.5c.29.29.68.44 1.06.44s.77-.15 1.06-.44l5.5-5.5c.59-.58.59-1.53 0-2.12zM5.21 10L10 5.21 14.79 10H5.21zM19 11.5s-2 2.17-2 3.5c0 1.1.9 2 2 2s2-.9 2-2c0-1.33-2-3.5-2-3.5z"/></svg>
                 </button>
@@ -125,7 +111,7 @@
 
             <aside class="layer-panel">
                 <div class="panel-header">
-                    <h3>Layers</h3>
+                    <h3>Layer</h3>
                 </div>
                 <div class="layer-controls">
                     <button class="layer-btn" id="addLayerBtn" title="Add Layer">
@@ -151,12 +137,14 @@
                     </button>
                 </div>
                 <div class="layer-opacity">
-                    <label>Layer Opacity</label>
-                    <input type="range" id="layerOpacity" min="0" max="100" value="100">
-                    <input type="number" id="layerOpacityValue" class="spinbox" min="0" max="100" value="100">
+                    <label class="tool-label">Opacity</label>
+                    <div style="display:flex;align-items:center;gap:4px;">
+                        <input type="range" id="layerOpacity" min="0" max="100" value="100" style="flex:1;">
+                        <input type="number" id="layerOpacityValue" class="spinbox" min="0" max="100" value="100">
+                    </div>
                 </div>
                 <div class="layer-blend">
-                    <label>Blend Mode</label>
+                    <label class="tool-label">Blend Mode</label>
                     <select id="layerBlendMode">
                         <option value="source-over">Normal</option>
                         <option value="multiply">Multiply</option>
@@ -177,23 +165,31 @@
                     </select>
                 </div>
                 <div class="layer-list" id="layerList"></div>
-                <div class="layer-opacity" style="margin-top:8px;">
-                    <label>Zoom</label>
-                    <div style="display:flex;align-items:center;gap:4px;">
-                        <input type="range" id="zoomSlider" min="100" max="5000" value="100" style="flex:1;">
-                        <input type="number" id="zoomValue" class="spinbox" min="100" max="5000" value="100" style="width:48px;">
-                        <button class="layer-btn" id="resetZoomBtn" title="Reset Zoom (Ctrl+0)" style="width:24px;height:24px;font-size:12px;">1:1</button>
-                    </div>
-                </div>
-                <div class="layer-opacity" style="margin-top:8px;">
-                    <label>Rotate</label>
-                    <div style="display:flex;align-items:center;gap:4px;">
-                        <input type="range" id="RotateSlider" min="-180" max="180" value="0" style="flex:1;">
-                        <input type="number" id="RotateValue" class="spinbox" min="-180" max="180" value="0" style="width:48px;">
-                        <button class="layer-btn" id="resetRotationBtn" title="Reset Zoom (Ctrl+Shift+[)" style="width:24px;height:24px;font-size:12px;">0</button>
-                    </div>
-                </div>
 
+                <div class="panel-header" style="margin-top: 10px;">
+                    <h3>Object</h3>
+                </div>
+                <div class="stroke-size" id="sizeToolGroup">
+                    <label class="tool-label">Size</label>
+                    <div style="display:flex;align-items:center;gap:4px;">
+                        <input type="range" id="brushSize" min="1" max="100" value="10" step="0.5" style="flex:1;">
+                        <input type="number" id="brushSizeValue" class="spinbox" min="1" max="100" value="10">
+                    </div>
+                </div>
+                <div class="fill-expand" id="expandToolGroup" style="display:none;">
+                    <label class="tool-label">Expand</label>
+                    <div style="display:flex;align-items:center;gap:4px;">
+                        <input type="range" id="expandOffset" min="0" max="20" value="2" step="0.5" style="flex:1;">
+                        <input type="number" id="expandOffsetValue" class="spinbox" min="0" max="20" value="2" step="0.5">
+                    </div>
+                </div>
+                <div class="object-opacity">
+                    <label class="tool-label">Opacity</label>
+                    <div style="display:flex;align-items:center;gap:4px;">
+                        <input type="range" id="brushOpacity" min="1" max="100" value="100" style="flex:1;">
+                        <input type="number" id="brushOpacityValue" class="spinbox" min="1" max="100" value="100">
+                    </div>
+                </div>
                 <div class="fill-controls" id="fillControls" style="margin-top:8px;display:none;">
                     <label>Fill Type</label>
                     <select id="fillTypeSelect" style="width:100%;padding:4px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);font-size:11px;">
@@ -238,6 +234,26 @@
                                 <input type="number" id="gradientRValue" class="spinbox" min="0" max="100" value="50" style="width:48px;">
                             </div>
                         </div>
+                    </div>
+                </div>
+
+                <div class="panel-header" style="margin-top: 10px;">
+                    <h3>Viewport</h3>
+                </div>
+                <div class="viewport-controls">
+                    <label class="tool-label">Zoom</label>
+                    <div style="display:flex;align-items:center;gap:4px;">
+                        <input type="range" id="zoomSlider" min="100" max="5000" value="100" style="flex:1;">
+                        <input type="number" id="zoomValue" class="spinbox" min="100" max="5000" value="100" style="width:48px;">
+                        <button class="layer-btn" id="resetZoomBtn" title="Reset Zoom (Ctrl+0)" style="width:24px;height:24px;font-size:12px;">1:1</button>
+                    </div>
+                </div>
+                <div class="viewport-controls">
+                    <label class="tool-label">Rotate</label>
+                    <div style="display:flex;align-items:center;gap:4px;">
+                        <input type="range" id="RotateSlider" min="-180" max="180" value="0" style="flex:1;">
+                        <input type="number" id="RotateValue" class="spinbox" min="-180" max="180" value="0" style="width:48px;">
+                        <button class="layer-btn" id="resetRotationBtn" title="Reset Zoom (Ctrl+Shift+[)" style="width:24px;height:24px;font-size:12px;">0</button>
                     </div>
                 </div>
             </aside>

@@ -1130,7 +1130,7 @@ class DrawingApp {
 
     syncSizeToSelection() {
         if (this.selectedIndices.length === 0) {
-            document.getElementById('sizeToolGroup').style.display = 'flex';
+            document.getElementById('sizeToolGroup').style.display = 'block';
             document.getElementById('brushSize').disabled = false;
             return;
         }
@@ -1142,7 +1142,7 @@ class DrawingApp {
         if (allFill || allImage) {
             document.getElementById('sizeToolGroup').style.display = 'none';
         } else {
-            document.getElementById('sizeToolGroup').style.display = 'flex';
+            document.getElementById('sizeToolGroup').style.display = 'block';
             document.getElementById('brushSize').disabled = false;
 
             const sizes = new Set();
@@ -1876,11 +1876,11 @@ class DrawingApp {
         const sizeGroup = document.getElementById('sizeToolGroup');
         if (sizeGroup) {
             const showSize = ['brush', 'line', 'rect', 'circle', 'pen'].includes(tool);
-            sizeGroup.style.display = showSize ? 'flex' : 'none';
+            sizeGroup.style.display = showSize ? 'block' : 'none';
         }
         const expandGroup = document.getElementById('expandToolGroup');
         if (expandGroup) {
-            expandGroup.style.display = tool === 'fill' ? 'flex' : 'none';
+            expandGroup.style.display = tool === 'fill' ? 'block' : 'none';
         }
         this.viewportRender();
     }
@@ -5535,7 +5535,7 @@ class DrawingApp {
         document.getElementById('toolCircle').style.display = 'flex';
         document.getElementById('toolFill').style.display = 'flex';
         const expandGroup = document.getElementById('expandToolGroup');
-        if (expandGroup) expandGroup.style.display = this.currentTool === 'fill' ? 'flex' : 'none';
+        if (expandGroup) expandGroup.style.display = this.currentTool === 'fill' ? 'block' : 'none';
         this.updateDeleteButton();
         this.updatePointTypeSelect();
         this.updateSelectionBBox();

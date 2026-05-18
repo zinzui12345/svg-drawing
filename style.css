@@ -228,7 +228,7 @@ input.spinbox:focus {
     fill: #e5e7eb;
 }
 
-.layer-opacity, .layer-blend {
+.layer-opacity, .layer-blend, .stroke-size, .fill-expand, .object-opacity, .viewport-controls {
     margin-bottom: 8px;
 }
 
