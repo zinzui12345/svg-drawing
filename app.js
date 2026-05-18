@@ -187,7 +187,12 @@ class DrawingApp {
         this.viewportCanvas.addEventListener('contextmenu', (e) => {
             e.preventDefault();
             if (this.currentTool === 'pen' && this.isPenActive) {
-                this.cancelPen();
+                if (this.penPoints.length > 1) {
+                    this.penPoints.pop();
+                    this.viewportRender();
+                } else {
+                    this.cancelPen();
+                }
             }
         });
         this.viewportCanvas.addEventListener('mousedown', (e) => this.handleContainerMouseDown(e));
@@ -3429,8 +3434,9 @@ class DrawingApp {
             vectorCommands: []
         };
 
-        this.layers.unshift(layer);
-        this.activeLayerIndex = 0;
+        const insertAt = Math.min(this.activeLayerIndex, this.layers.length);
+        this.layers.splice(insertAt, 0, layer);
+        this.activeLayerIndex = insertAt;
         this.viewportRender();
         this.updateLayerPanel();
     }
@@ -3758,11 +3764,13 @@ class DrawingApp {
             const hasVector = commands.some(cmd => ['brush', 'fill', 'line', 'rect', 'circle', 'image'].includes(cmd.type));
 
             const layerLabel = layer.name.replace(/"/g, '&quot;');
+            const displayVal = layer.visible === false ? 'none' : 'inline';
             const layerGroupAttrs = [
                 `id="layer_${layer.id}"`,
                 `inkscape:groupmode="layer"`,
                 `inkscape:label="${layerLabel}"`,
                 `opacity="${layer.opacity}"`,
+                `display="${displayVal}"`,
                 `style="mix-blend-mode: ${this.getCSSBlendMode(layer.blendMode)}"`
             ].join(' ');
 
@@ -4019,9 +4027,12 @@ class DrawingApp {
         const layerGroups = this.extractLayers(svg);
         if (layerGroups.length > 0) {
             for (let i = 0; i < layerGroups.length; i++) {
-                const { name, elements, groupEl } = layerGroups[i];
+                const { name, opacity, visible, elements, groupEl } = layerGroups[i];
                 this.addLayer(name);
-                this.parseSVGElements(elements, this.layers[0].vectorCommands, scaleX, scaleY, vbX, vbY, svgGradients);
+                const layerIdx = this.activeLayerIndex;
+                this.layers[layerIdx].opacity = opacity;
+                this.layers[layerIdx].visible = visible;
+                this.parseSVGElements(elements, this.layers[layerIdx].vectorCommands, scaleX, scaleY, vbX, vbY, svgGradients);
                 if (groupEl) {
                     const style = groupEl.getAttribute('style') || '';
                     const match = style.match(/mix-blend-mode:\s*([\w-]+)/);
@@ -4046,7 +4057,7 @@ class DrawingApp {
                             'luminosity': 'luminosity'
                         };
                         if (canvasBlendMap[cssBlend]) {
-                            this.layers[0].blendMode = canvasBlendMap[cssBlend];
+                            this.layers[layerIdx].blendMode = canvasBlendMap[cssBlend];
                         }
                     }
                 }
@@ -4054,7 +4065,7 @@ class DrawingApp {
         } else {
             this.addLayer('Imported SVG');
             const allElements = svg.children;
-            this.parseSVGElements(allElements, this.layers[0].vectorCommands, scaleX, scaleY, vbX, vbY, svgGradients);
+            this.parseSVGElements(allElements, this.layers[this.activeLayerIndex].vectorCommands, scaleX, scaleY, vbX, vbY, svgGradients);
         }
 
         this.viewportRender();
@@ -4139,8 +4150,11 @@ class DrawingApp {
 
         const processGroup = (el) => {
             const name = el.getAttribute('inkscape:label') || el.getAttribute('id') || el.getAttribute('class') || 'Layer';
+            const opacity = parseFloat(el.getAttribute('opacity'));
+            const display = el.getAttribute('display');
+            const visible = display !== 'none';
             const elements = Array.from(el.children);
-            layers.push({ name, elements, groupEl: el });
+            layers.push({ name, opacity: isNaN(opacity) ? 1 : opacity, visible, elements, groupEl: el });
         };
 
         const layerGroups = svg.querySelectorAll('[inkscape\\:groupmode="layer"], .layer');
