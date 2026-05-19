@@ -92,7 +92,7 @@ The sidebar panel is organized into sections:
 | **Ctrl+Shift+A**          | Deselect all                  |
 | **Ctrl+S**                | Export SVG                    |
 | **Ctrl+I**                | Import image                  |
-| **Tab**                   | Toggle layer panel visibility |
+| **Tab**                   | Toggle side panel visibility  |
 | **Ctrl+0**                | Reset zoom, pan & rotation    |
 | **Delete / Backspace**    | Delete selected objects       |
 | **F2**                    | Rename active layer           |

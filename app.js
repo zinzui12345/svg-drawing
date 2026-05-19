@@ -37,6 +37,7 @@ class DrawingApp {
         this.maxHistory = 50;
 
         this.shapeStart = null;
+        this._constrainShape = false;
 
         this.mouseX = 0;
         this.mouseY = 0;
@@ -72,6 +73,7 @@ class DrawingApp {
         this.addPointMode = false;
         this.hoveredPointIndex = -1;
         this.hoveredSegmentIndex = -1;
+        this.hoveredSegmentT = 0.5;
         this.hoveredHandle = null;
         this.draggedHandle = null;
 
@@ -983,6 +985,7 @@ class DrawingApp {
 
         if (this.currentTool === 'line' || this.currentTool === 'rect' || this.currentTool === 'circle') {
             this.shapeStart = { x: coords.x, y: coords.y };
+            this._constrainShape = e.ctrlKey || e.metaKey;
         } else if (this.currentTool === 'brush') {
             this.saveState();
             this.currentStroke = {
@@ -1607,6 +1610,9 @@ class DrawingApp {
         const coords = this.getCanvasCoordinates(e);
         this.mouseX = coords.x;
         this.mouseY = coords.y;
+        if (this.isDrawing && ['line', 'rect', 'circle'].includes(this.currentTool)) {
+            this._constrainShape = e.ctrlKey || e.metaKey;
+        }
 
         if (this.pathEditMode) {
             this.handlePathEditMouseMove(e, coords);
@@ -1677,25 +1683,35 @@ class DrawingApp {
                 cmd = { type: 'line', color: this.brushColor, size: this.brushSize, opacity: this.brushOpacity,
                     x1: this.shapeStart.x, y1: this.shapeStart.y, x2: coords.x, y2: coords.y };
             } else if (this.currentTool === 'rect') {
-                const x1 = Math.min(this.shapeStart.x, coords.x);
-                const y1 = Math.min(this.shapeStart.y, coords.y);
-                const x2 = Math.max(this.shapeStart.x, coords.x);
-                const y2 = Math.max(this.shapeStart.y, coords.y);
+                let rx1 = this.shapeStart.x;
+                let ry1 = this.shapeStart.y;
+                let rx2 = coords.x;
+                let ry2 = coords.y;
+                if (this._constrainShape) {
+                    const dx = Math.abs(rx2 - rx1);
+                    const dy = Math.abs(ry2 - ry1);
+                    const s = Math.max(dx, dy);
+                    rx2 = rx1 + (rx2 >= rx1 ? s : -s);
+                    ry2 = ry1 + (ry2 >= ry1 ? s : -s);
+                }
+                const x1 = Math.min(rx1, rx2);
+                const y1 = Math.min(ry1, ry2);
+                const x2 = Math.max(rx1, rx2);
+                const y2 = Math.max(ry1, ry2);
                 cmd = { type: 'brush', color: this.brushColor, size: this.brushSize, opacity: this.brushOpacity,
                     points: [{ x: x1, y: y1 }, { x: x2, y: y1 }, { x: x2, y: y2 }, { x: x1, y: y2 }], closed: true };
             } else {
                 const cx = (this.shapeStart.x + coords.x) / 2;
                 const cy = (this.shapeStart.y + coords.y) / 2;
-                const rx = Math.abs(coords.x - this.shapeStart.x) / 2;
-                const ry = Math.abs(coords.y - this.shapeStart.y) / 2;
-                const pts = [];
-                const steps = 36;
-                for (let i = 0; i < steps; i++) {
-                    const a = (i / steps) * Math.PI * 2;
-                    pts.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
+                let rx = Math.abs(coords.x - this.shapeStart.x) / 2;
+                let ry = Math.abs(coords.y - this.shapeStart.y) / 2;
+                if (this._constrainShape) {
+                    const r = Math.max(rx, ry);
+                    rx = r;
+                    ry = r;
                 }
                 cmd = { type: 'brush', color: this.brushColor, size: this.brushSize, opacity: this.brushOpacity,
-                    points: pts, closed: true };
+                    points: this.makeEllipsePoints(cx, cy, rx, ry), closed: true };
             }
             activeLayer.vectorCommands.push(cmd);
             this.shapeStart = null;
@@ -1711,6 +1727,7 @@ class DrawingApp {
         this.currentStroke = null;
         this.isDrawing = false;
         this.shapeStart = null;
+        this._constrainShape = false;
         this.viewportRender();
     }
 
@@ -1734,6 +1751,7 @@ class DrawingApp {
             this.hoveredHandle = null;
             this.hoveredPointIndex = -1;
             this.hoveredSegmentIndex = -1;
+            this.hoveredSegmentT = 0.5;
             this.viewportRender();
             return;
         }
@@ -1746,6 +1764,7 @@ class DrawingApp {
             this.currentStroke = null;
             this.isDrawing = false;
             this.shapeStart = null;
+            this._constrainShape = false;
             this.viewportRender();
         } else if (this.currentTool === 'select' && (this.isSelecting || this.isRotating)) {
             if (this.selectMode === 'marquee') {
@@ -1821,14 +1840,24 @@ class DrawingApp {
             ctx.lineTo(x2, y2);
             ctx.stroke();
         } else if (this.currentTool === 'rect') {
-            const width = x2 - x1;
-            const height = y2 - y1;
+            let width = x2 - x1;
+            let height = y2 - y1;
+            if (this._constrainShape) {
+                const s = Math.max(Math.abs(width), Math.abs(height));
+                width = (width >= 0 ? 1 : -1) * s;
+                height = (height >= 0 ? 1 : -1) * s;
+            }
             ctx.beginPath();
             ctx.rect(x1, y1, width, height);
             ctx.stroke();
         } else if (this.currentTool === 'circle') {
-            const radiusX = Math.abs(x2 - x1) / 2;
-            const radiusY = Math.abs(y2 - y1) / 2;
+            let radiusX = Math.abs(x2 - x1) / 2;
+            let radiusY = Math.abs(y2 - y1) / 2;
+            if (this._constrainShape) {
+                const r = Math.max(radiusX, radiusY);
+                radiusX = r;
+                radiusY = r;
+            }
             const centerX = x1 + (x2 - x1) / 2;
             const centerY = y1 + (y2 - y1) / 2;
             ctx.beginPath();
@@ -2130,11 +2159,22 @@ class DrawingApp {
                 if (this.dist(mx, my, p.x, p.y) < hitRadius) return true;
             }
             for (let i = 1; i < cmd.points.length; i++) {
-                if (this.distToSegment(mx, my, cmd.points[i - 1].x, cmd.points[i - 1].y, cmd.points[i].x, cmd.points[i].y) < hitRadius) return true;
+                const prev = cmd.points[i - 1];
+                const curr = cmd.points[i];
+                if (prev.cp2x !== undefined && curr.cp1x !== undefined) {
+                    if (this.hitTestBezierSegment(mx, my, prev, curr, hitRadius)) return true;
+                } else {
+                    if (this.distToSegment(mx, my, prev.x, prev.y, curr.x, curr.y) < hitRadius) return true;
+                }
             }
             if (cmd.closed && cmd.points.length >= 2) {
-                const last = cmd.points.length - 1;
-                if (this.distToSegment(mx, my, cmd.points[last].x, cmd.points[last].y, cmd.points[0].x, cmd.points[0].y) < hitRadius) return true;
+                const last = cmd.points[cmd.points.length - 1];
+                const first = cmd.points[0];
+                if (last.cp2x !== undefined && first.cp1x !== undefined) {
+                    if (this.hitTestBezierSegment(mx, my, last, first, hitRadius)) return true;
+                } else {
+                    if (this.distToSegment(mx, my, last.x, last.y, first.x, first.y) < hitRadius) return true;
+                }
             }
             return false;
         } else if (cmd.type === 'fill') {
@@ -2573,7 +2613,15 @@ class DrawingApp {
                         ctx.lineTo(curr.x, curr.y);
                     }
                 }
-                if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= cmd.size * 2) ctx.closePath();
+                if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= cmd.size * 2) {
+                    const last = cmd.points[cmd.points.length - 1];
+                    const first = cmd.points[0];
+                    if (last.cp2x !== undefined && first.cp1x !== undefined) {
+                        ctx.bezierCurveTo(last.cp2x, last.cp2y, first.cp1x, first.cp1y, first.x, first.y);
+                    } else {
+                        ctx.closePath();
+                    }
+                }
                 ctx.stroke();
             }
         } else if (cmd.type === 'fill') {
@@ -2591,7 +2639,13 @@ class DrawingApp {
                         ctx.lineTo(curr.x, curr.y);
                     }
                 }
-                ctx.closePath();
+                const last = contour[contour.length - 1];
+                const first = contour[0];
+                if (last.cp2x !== undefined && first.cp1x !== undefined) {
+                    ctx.bezierCurveTo(last.cp2x, last.cp2y, first.cp1x, first.cp1y, first.x, first.y);
+                } else {
+                    ctx.closePath();
+                }
             };
             if (Array.isArray(pts)) {
                 drawContour(pts);
@@ -2640,6 +2694,16 @@ class DrawingApp {
         }
     }
 
+    makeEllipsePoints(cx, cy, rx, ry) {
+        const k = 0.5522847498307937;
+        return [
+            { x: cx + rx, y: cy,  type: 'symmetric', cp1x: cx + rx,       cp1y: cy - ry * k, cp2x: cx + rx,       cp2y: cy + ry * k },
+            { x: cx,      y: cy + ry, type: 'symmetric', cp1x: cx + rx * k, cp1y: cy + ry,     cp2x: cx - rx * k, cp2y: cy + ry },
+            { x: cx - rx, y: cy,  type: 'symmetric', cp1x: cx - rx,       cp1y: cy + ry * k, cp2x: cx - rx,       cp2y: cy - ry * k },
+            { x: cx,      y: cy - ry, type: 'symmetric', cp1x: cx - rx * k, cp1y: cy - ry,     cp2x: cx + rx * k, cp2y: cy - ry }
+        ];
+    }
+
     getFillPointsBounds(cmd) {
         const pts = cmd.points;
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -2686,11 +2750,10 @@ class DrawingApp {
         const pts = cmd.points;
         if (!pts || pts.length === 0) return null;
 
-        const flat = this.sampleStroke(pts);
+        const closed = cmd.closed || (pts.length >= 2 &&
+            Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y) <= cmd.size * 2);
+        const flat = this.sampleStroke(pts, closed);
         if (flat.length < 3) return null;
-
-        const closed = cmd.closed || (flat.length > 2 &&
-            Math.hypot(flat[0].x - flat[flat.length - 1].x, flat[0].y - flat[flat.length - 1].y) <= cmd.size * 2);
 
         if (!closed) return null;
 
@@ -2751,15 +2814,15 @@ class DrawingApp {
         // Fast path: find a closed brush stroke containing the click, with no other objects inside it
         for (const cmd of commands) {
             if (cmd.type !== 'brush') continue;
-            const flat = this.sampleStroke(cmd.points);
+            const closed = cmd.closed || (cmd.points.length >= 2 && Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length-1].x, cmd.points[0].y - cmd.points[cmd.points.length-1].y) <= cmd.size * 2);
+            const flat = this.sampleStroke(cmd.points, closed);
             if (flat.length < 3) continue;
-            const closed = cmd.closed || Math.hypot(flat[0].x - flat[flat.length-1].x, flat[0].y - flat[flat.length-1].y) <= cmd.size * 2;
             if (!closed || !this.pointInRing(x, y, flat)) continue;
             // Check no other non-fill object is inside this brush stroke
             let hasInner = false;
             for (const other of commands) {
                 if (other === cmd || other.type === 'fill') continue;
-                const otherFlat = other.type === 'brush' ? this.sampleStroke(other.points) : null;
+                const otherFlat = other.type === 'brush' ? this.sampleStroke(other.points, other.closed) : null;
                 if (otherFlat && otherFlat.length >= 2 && this.pointInRing(otherFlat[Math.floor(otherFlat.length / 2)].x, otherFlat[Math.floor(otherFlat.length / 2)].y, flat)) {
                     hasInner = true; break;
                 }
@@ -2788,11 +2851,10 @@ class DrawingApp {
             return;
         }
 
-        // Union all command obstacles (skip existing fills)
+        // Union all command obstacles
         let inkUnion = null;
         for (let ci = 0; ci < commands.length; ci++) {
             const cmd = commands[ci];
-            if (cmd.type === 'fill') continue;
             const polys = this.cmdToPolygons(cmd);
             if (!polys || !polys.regions || polys.regions.length === 0) continue;
             if (polys.regions.some(r => r.length < 3)) continue;
@@ -2989,7 +3051,6 @@ class DrawingApp {
     brushToPolygon(cmd) {
         const pts = cmd.points;
         if (!pts || pts.length === 0) { console.log('brushToPolygon: no points'); return null; }
-        console.log('brushToPolygon: pts.length=' + pts.length + ', size=' + cmd.size + ', flat=', this.sampleStroke(pts).length);
         if (pts.length === 1) {
             const r = cmd.size / 2;
             const ring = [];
@@ -2999,10 +3060,8 @@ class DrawingApp {
             }
             return { regions: [ring], inverted: false };
         }
-        const flat = this.sampleStroke(pts);
-        if (flat.length < 2) { console.log('brushToPolygon: flat too short'); return null; }
-        const closed = cmd.closed || (flat.length > 2 &&
-            Math.hypot(flat[0].x - flat[flat.length - 1].x, flat[0].y - flat[flat.length - 1].y) <= cmd.size * 2);
+        const closed = cmd.closed || (pts.length >= 2 && Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y) <= cmd.size * 2);
+        const flat = this.sampleStroke(pts, closed);
         if (closed && flat.length > 2 &&
             (flat[0].x !== flat[flat.length - 1].x || flat[0].y !== flat[flat.length - 1].y)) {
             flat.push({ x: flat[0].x, y: flat[0].y });
@@ -3027,11 +3086,12 @@ class DrawingApp {
         return obstacle;
     }
 
-    sampleStroke(points) {
+    sampleStroke(points, closed) {
         const result = [{ x: points[0].x, y: points[0].y }];
-        for (let i = 0; i < points.length - 1; i++) {
+        const len = closed ? points.length : points.length - 1;
+        for (let i = 0; i < len; i++) {
             const curr = points[i];
-            const next = points[i + 1];
+            const next = points[(i + 1) % points.length];
             if (curr.cp2x !== undefined && next.cp1x !== undefined) {
                 for (let s = 1; s < 8; s++) {
                     const t = s / 8;
@@ -3042,7 +3102,7 @@ class DrawingApp {
                     });
                 }
             }
-            result.push({ x: next.x, y: next.y });
+            if (i < points.length - 1) result.push({ x: next.x, y: next.y });
         }
         return result;
     }
@@ -3338,6 +3398,22 @@ class DrawingApp {
         } : { r: 0, g: 0, b: 0 };
     }
 
+    hitTestBezierSegment(mx, my, p0, p1, hitRadius) {
+        const steps = 12;
+        let prevX, prevY;
+        for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const mt = 1 - t;
+            const x = mt * mt * mt * p0.x + 3 * mt * mt * t * (p0.cp2x || p0.x) + 3 * mt * t * t * (p1.cp1x || p1.x) + t * t * t * p1.x;
+            const y = mt * mt * mt * p0.y + 3 * mt * mt * t * (p0.cp2y || p0.y) + 3 * mt * t * t * (p1.cp1y || p1.y) + t * t * t * p1.y;
+            if (this.dist(mx, my, x, y) < hitRadius) return true;
+            if (i > 0 && this.distToSegment(mx, my, prevX, prevY, x, y) < hitRadius) return true;
+            prevX = x;
+            prevY = y;
+        }
+        return false;
+    }
+
     distToSegment(px, py, x1, y1, x2, y2) {
         const dx = x2 - x1;
         const dy = y2 - y1;
@@ -3346,6 +3422,63 @@ class DrawingApp {
         let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
         t = Math.max(0, Math.min(1, t));
         return this.dist(px, py, x1 + t * dx, y1 + t * dy);
+    }
+
+    cubicBezierPoint(p0x, p0y, p1x, p1y, p2x, p2y, p3x, p3y, t) {
+        const mt = 1 - t;
+        const mt2 = mt * mt;
+        const mt3 = mt2 * mt;
+        const t2 = t * t;
+        const t3 = t2 * t;
+        return {
+            x: mt3 * p0x + 3 * mt2 * t * p1x + 3 * mt * t2 * p2x + t3 * p3x,
+            y: mt3 * p0y + 3 * mt2 * t * p1y + 3 * mt * t2 * p2y + t3 * p3y
+        };
+    }
+
+    closestTOnCubicBezier(p0x, p0y, p1x, p1y, p2x, p2y, p3x, p3y, mx, my) {
+        const steps = 20;
+        let minDist = Infinity;
+        let closestT = 0;
+        for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const p = this.cubicBezierPoint(p0x, p0y, p1x, p1y, p2x, p2y, p3x, p3y, t);
+            const d = (p.x - mx) ** 2 + (p.y - my) ** 2;
+            if (d < minDist) { minDist = d; closestT = t; }
+        }
+        const range = 1 / steps;
+        const refineSteps = 10;
+        for (let i = -refineSteps; i <= refineSteps; i++) {
+            const t = closestT + range * i / refineSteps;
+            if (t < 0 || t > 1) continue;
+            const p = this.cubicBezierPoint(p0x, p0y, p1x, p1y, p2x, p2y, p3x, p3y, t);
+            const d = (p.x - mx) ** 2 + (p.y - my) ** 2;
+            if (d < minDist) { minDist = d; closestT = t; }
+        }
+        return closestT;
+    }
+
+    splitCubicBezier(p0x, p0y, p1x, p1y, p2x, p2y, p3x, p3y, t) {
+        const mt = 1 - t;
+        const ax = mt * p0x + t * p1x;
+        const ay = mt * p0y + t * p1y;
+        const bx = mt * p1x + t * p2x;
+        const by = mt * p1y + t * p2y;
+        const cx = mt * p2x + t * p3x;
+        const cy = mt * p2y + t * p3y;
+        const dx = mt * ax + t * bx;
+        const dy = mt * ay + t * by;
+        const ex = mt * bx + t * cx;
+        const ey = mt * by + t * cy;
+        const fx = mt * dx + t * ex;
+        const fy = mt * dy + t * ey;
+        return {
+            point: { x: fx, y: fy },
+            leftCp2: { x: ax, y: ay },
+            newCp1: { x: dx, y: dy },
+            newCp2: { x: ex, y: ey },
+            rightCp1: { x: cx, y: cy }
+        };
     }
 
     distToRect(px, py, rx, ry, rw, rh) {
@@ -3818,7 +3951,15 @@ class DrawingApp {
                                     d += ` L ${curr.x.toFixed(2)} ${curr.y.toFixed(2)}`;
                                 }
                             }
-                            if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= cmd.size * 2) d += ' Z';
+                            if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= cmd.size * 2) {
+                                const last = cmd.points[cmd.points.length - 1];
+                                const first = cmd.points[0];
+                                if (last.cp2x !== undefined && first.cp1x !== undefined) {
+                                    d += ` C ${last.cp2x.toFixed(2)} ${last.cp2y.toFixed(2)} ${first.cp1x.toFixed(2)} ${first.cp1y.toFixed(2)} ${first.x.toFixed(2)} ${first.y.toFixed(2)}`;
+                                } else {
+                                    d += ' Z';
+                                }
+                            }
                             svgParts.push(`    <path d="${d}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="${cmd.opacity}"/>`);
                         }
                     } else if (cmd.type === 'fill') {
@@ -3835,7 +3976,13 @@ class DrawingApp {
                                     d += ` L ${curr.x.toFixed(2)} ${curr.y.toFixed(2)}`;
                                 }
                             }
-                            d += ' Z';
+                            const lastC = contour[contour.length - 1];
+                            const firstC = contour[0];
+                            if (lastC.cp2x !== undefined && firstC.cp1x !== undefined) {
+                                d += ` C ${lastC.cp2x.toFixed(2)} ${lastC.cp2y.toFixed(2)} ${firstC.cp1x.toFixed(2)} ${firstC.cp1y.toFixed(2)} ${firstC.x.toFixed(2)} ${firstC.y.toFixed(2)}`;
+                            } else {
+                                d += ' Z';
+                            }
                             return d;
                         };
                         let d;
@@ -4378,26 +4525,17 @@ class DrawingApp {
                 const cx = (parseFloat(el.getAttribute('cx') || '0') - vbX) * scaleX;
                 const cy = (parseFloat(el.getAttribute('cy') || '0') - vbY) * scaleY;
                 const r = parseFloat(el.getAttribute('r') || '0') * scaleX;
+                const circlePts = this.makeEllipsePoints(cx, cy, r, r);
                 if (hasFill) {
-                    const fillPoints = [];
-                    for (let i = 0; i < 36; i++) {
-                        const a = (i / 36) * Math.PI * 2;
-                        fillPoints.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
-                    }
                     const fillCmd = {
                         type: 'fill', color: fillInfo.isGradient ? fillInfo.gradient.stops[fillInfo.gradient.stops.length - 1].color : fillInfo.color,
-                        opacity, points: fillPoints
+                        opacity, points: circlePts.map(p => ({ x: p.x, y: p.y }))
                     };
                     if (fillInfo.isGradient) {
                         fillCmd.fillType = fillInfo.gradient.type === 'radial' ? 'radial' : 'linear';
                         fillCmd.gradient = fillInfo.gradient;
                     }
                     commands.push(fillCmd);
-                }
-                const circlePts = [];
-                for (let i = 0; i < 36; i++) {
-                    const a = (i / 36) * Math.PI * 2;
-                    circlePts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
                 }
                 if (hasStroke) {
                     commands.push({
@@ -4416,26 +4554,17 @@ class DrawingApp {
                 const cy = (parseFloat(el.getAttribute('cy') || '0') - vbY) * scaleY;
                 const rx = parseFloat(el.getAttribute('rx') || '0') * scaleX;
                 const ry = parseFloat(el.getAttribute('ry') || '0') * scaleY;
+                const ellipsePts = this.makeEllipsePoints(cx, cy, rx, ry);
                 if (hasFill) {
-                    const fillPoints = [];
-                    for (let i = 0; i < 36; i++) {
-                        const a = (i / 36) * Math.PI * 2;
-                        fillPoints.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
-                    }
                     const fillCmd = {
                         type: 'fill', color: fillInfo.isGradient ? fillInfo.gradient.stops[fillInfo.gradient.stops.length - 1].color : fillInfo.color,
-                        opacity, points: fillPoints
+                        opacity, points: ellipsePts.map(p => ({ x: p.x, y: p.y }))
                     };
                     if (fillInfo.isGradient) {
                         fillCmd.fillType = fillInfo.gradient.type === 'radial' ? 'radial' : 'linear';
                         fillCmd.gradient = fillInfo.gradient;
                     }
                     commands.push(fillCmd);
-                }
-                const ellipsePts = [];
-                for (let i = 0; i < 36; i++) {
-                    const a = (i / 36) * Math.PI * 2;
-                    ellipsePts.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
                 }
                 if (hasStroke) {
                     commands.push({
@@ -5039,7 +5168,7 @@ class DrawingApp {
             const cmd = cmds[idx];
             if (cmd.type === 'brush') {
                 const pts = cmd.points.map(p => ({ ...p }));
-                if (pts.length >= 2) {
+                if (pts.length >= 2 && !cmd.closed) {
                     const last = pts[pts.length - 1];
                     const first = pts[0];
                     if (Math.hypot(first.x - last.x, first.y - last.y) > 1) {
@@ -5559,6 +5688,7 @@ class DrawingApp {
         this.lastPathPoint = null;
         this.hoveredPointIndex = -1;
         this.hoveredSegmentIndex = -1;
+        this.hoveredSegmentT = 0.5;
         this.hoveredHandle = null;
         document.getElementById('pathEditBtn').classList.remove('active');
         document.getElementById('addPointBtn').classList.remove('active');
@@ -5692,8 +5822,17 @@ class DrawingApp {
             if (idx < points.length - 1) {
                 const p1 = points[idx];
                 const p2 = points[idx + 1];
-                const mx = (p1.x + p2.x) / 2;
-                const my = (p1.y + p2.y) / 2;
+                let mx, my;
+                const hasCp = p1.cp2x !== undefined && p2.cp1x !== undefined;
+                if (hasCp) {
+                    const segT = this.hoveredSegmentT;
+                    const pt = this.cubicBezierPoint(p1.x, p1.y, p1.cp2x, p1.cp2y, p2.cp1x, p2.cp1y, p2.x, p2.y, segT);
+                    mx = pt.x;
+                    my = pt.y;
+                } else {
+                    mx = (p1.x + p2.x) / 2;
+                    my = (p1.y + p2.y) / 2;
+                }
 
                 ctx.fillStyle = '#4a9eff';
                 ctx.strokeStyle = '#ffffff';
@@ -5758,7 +5897,20 @@ class DrawingApp {
         for (let i = 0; i < points.length - 1; i++) {
             const p1 = points[i];
             const p2 = points[i + 1];
-            if (this.distToSegment(mx, my, p1.x, p1.y, p2.x, p2.y) < hitRadius) return i;
+            const hasCp = p1.cp2x !== undefined && p2.cp1x !== undefined;
+            if (hasCp) {
+                const t = this.closestTOnCubicBezier(p1.x, p1.y, p1.cp2x, p1.cp2y, p2.cp1x, p2.cp1y, p2.x, p2.y, mx, my);
+                const pt = this.cubicBezierPoint(p1.x, p1.y, p1.cp2x, p1.cp2y, p2.cp1x, p2.cp1y, p2.x, p2.y, t);
+                if (this.dist(mx, my, pt.x, pt.y) < hitRadius) {
+                    this.hoveredSegmentT = t;
+                    return i;
+                }
+            } else {
+                if (this.distToSegment(mx, my, p1.x, p1.y, p2.x, p2.y) < hitRadius) {
+                    this.hoveredSegmentT = 0.5;
+                    return i;
+                }
+            }
         }
 
         return -1;
@@ -5769,8 +5921,38 @@ class DrawingApp {
 
         this.saveState();
         const idx = this.hoveredSegmentIndex;
-        this.editingPathCmd.points.splice(idx + 1, 0, { x: mx, y: my });
-        this.selectedPointIndex = idx + 1;
+        const points = this.editingPathCmd.points;
+        const hasCp = points[idx].cp2x !== undefined && points[idx + 1].cp1x !== undefined;
+
+        if (hasCp) {
+            const p0 = points[idx];
+            const p3 = points[idx + 1];
+            const t = this.hoveredSegmentT;
+            const split = this.splitCubicBezier(p0.x, p0.y, p0.cp2x, p0.cp2y, p3.cp1x, p3.cp1y, p3.x, p3.y, t);
+
+            p0.cp2x = split.leftCp2.x;
+            p0.cp2y = split.leftCp2.y;
+
+            const newPoint = {
+                x: split.point.x,
+                y: split.point.y,
+                type: 'symmetric',
+                cp1x: split.newCp1.x,
+                cp1y: split.newCp1.y,
+                cp2x: split.newCp2.x,
+                cp2y: split.newCp2.y
+            };
+            points.splice(idx + 1, 0, newPoint);
+
+            p3.cp1x = split.rightCp1.x;
+            p3.cp1y = split.rightCp1.y;
+
+            this.selectedPointIndex = idx + 1;
+        } else {
+            points.splice(idx + 1, 0, { x: mx, y: my });
+            this.selectedPointIndex = idx + 1;
+        }
+
         this.viewportRender();
         this.updatePointTypeSelect();
     }
