@@ -396,6 +396,7 @@ class DrawingApp {
         document.getElementById('imageFileInput').addEventListener('change', (e) => this.openImage(e));
         document.getElementById('clearLayerBtn').addEventListener('click', () => this.clearActiveLayer());
         document.getElementById('exportSVGBtn').addEventListener('click', () => this.exportSVG());
+        document.getElementById('exportHTMLBtn').addEventListener('click', () => this.exportHTML());
         document.getElementById('exportPNGBtn').addEventListener('click', () => this.exportImage());
         document.getElementById('resetZoomBtn').addEventListener('click', () => this.fitCanvasToContainer());
 
@@ -3882,7 +3883,7 @@ class DrawingApp {
         link.click();
     }
 
-    exportSVG() {
+    getSVGContent() {
         const svgParts = [];
         svgParts.push(`<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" viewBox="0 0 ${this.canvasWidth} ${this.canvasHeight}" width="${this.canvasWidth}" height="${this.canvasHeight}">`);
         svgParts.push(`  <rect width="${this.canvasWidth}" height="${this.canvasHeight}" fill="#ffffff"/>`);
@@ -4034,8 +4035,11 @@ class DrawingApp {
         }
 
         svgParts.push(`</svg>`);
+        return svgParts.join('\n');
+    }
 
-        const svgContent = svgParts.join('\n');
+    exportSVG() {
+        const svgContent = this.getSVGContent();
         const blob = new Blob([svgContent], { type: 'image/svg+xml' });
 
         const doSave = (handle) => {
@@ -4071,6 +4075,64 @@ class DrawingApp {
         link.click();
         URL.revokeObjectURL(url);
         alert('File SVG berhasil disimpan.');
+    }
+
+    exportHTML() {
+        const svgContent = this.getSVGContent();
+        const w = this.canvasWidth;
+        const h = this.canvasHeight;
+        const htmlContent = `<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Drawing Export</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background: #f0f0f0;
+    font-family: sans-serif;
+  }
+  svg {
+    max-width: 100vw;
+    max-height: 100vh;
+    display: block;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+    background: #fff;
+  }
+</style>
+</head>
+<body>
+${svgContent}
+</body>
+</html>`;
+        const blob = new Blob([htmlContent], { type: 'text/html' });
+
+        if ('showSaveFilePicker' in window) {
+            window.showSaveFilePicker({
+                types: [{ accept: { 'text/html': ['.html'] } }],
+                suggestedName: this.openedFileName ? this.openedFileName.replace(/\.svg$/i, '.html') : 'drawing.html'
+            }).then(handle => {
+                handle.createWritable().then(writable => {
+                    writable.write(blob).then(() => writable.close());
+                }).then(() => {
+                    alert('File HTML berhasil disimpan.');
+                });
+            }).catch(() => {});
+            return;
+        }
+
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.download = this.openedFileName ? this.openedFileName.replace(/\.svg$/i, '.html') : 'drawing.html';
+        link.href = url;
+        link.click();
+        URL.revokeObjectURL(url);
+        alert('File HTML berhasil disimpan.');
     }
 
     openSVGFile() {
@@ -5819,9 +5881,21 @@ class DrawingApp {
 
         if (this.addPointMode && this.hoveredSegmentIndex >= 0) {
             const idx = this.hoveredSegmentIndex;
-            if (idx < points.length - 1) {
-                const p1 = points[idx];
-                const p2 = points[idx + 1];
+            const isClosed = this.editingPathCmd.type === 'fill' || this.editingPathCmd.closed;
+            const isClosingSeg = isClosed && idx >= points.length - 1 && points.length >= 2;
+
+            let p1, p2;
+            if (isClosingSeg) {
+                p1 = points[points.length - 1];
+                p2 = points[0];
+            } else if (idx < points.length - 1) {
+                p1 = points[idx];
+                p2 = points[idx + 1];
+            } else {
+                p1 = null;
+            }
+
+            if (p1) {
                 let mx, my;
                 const hasCp = p1.cp2x !== undefined && p2.cp1x !== undefined;
                 if (hasCp) {
@@ -5894,6 +5968,8 @@ class DrawingApp {
         const bs = this.canvasCSSWidth / this.canvasWidth;
         const hitRadius = (7.5 + 7.5 * Math.min(1, (z - 1) / 49)) / (bs * z);
 
+        const isClosed = this.editingPathCmd.type === 'fill' || this.editingPathCmd.closed;
+
         for (let i = 0; i < points.length - 1; i++) {
             const p1 = points[i];
             const p2 = points[i + 1];
@@ -5913,6 +5989,26 @@ class DrawingApp {
             }
         }
 
+        if (isClosed && points.length >= 2) {
+            const last = points[points.length - 1];
+            const first = points[0];
+            const hasCp = last.cp2x !== undefined && first.cp1x !== undefined;
+            const idx = points.length - 1;
+            if (hasCp) {
+                const t = this.closestTOnCubicBezier(last.x, last.y, last.cp2x, last.cp2y, first.cp1x, first.cp1y, first.x, first.y, mx, my);
+                const pt = this.cubicBezierPoint(last.x, last.y, last.cp2x, last.cp2y, first.cp1x, first.cp1y, first.x, first.y, t);
+                if (this.dist(mx, my, pt.x, pt.y) < hitRadius) {
+                    this.hoveredSegmentT = t;
+                    return idx;
+                }
+            } else {
+                if (this.distToSegment(mx, my, last.x, last.y, first.x, first.y) < hitRadius) {
+                    this.hoveredSegmentT = 0.5;
+                    return idx;
+                }
+            }
+        }
+
         return -1;
     }
 
@@ -5922,11 +6018,23 @@ class DrawingApp {
         this.saveState();
         const idx = this.hoveredSegmentIndex;
         const points = this.editingPathCmd.points;
-        const hasCp = points[idx].cp2x !== undefined && points[idx + 1].cp1x !== undefined;
+        const isClosed = this.editingPathCmd.type === 'fill' || this.editingPathCmd.closed;
+        const isClosingSeg = isClosed && idx >= points.length - 1 && points.length >= 2;
+
+        let p0, p3, insertAt;
+        if (isClosingSeg) {
+            p0 = points[points.length - 1];
+            p3 = points[0];
+            insertAt = points.length;
+        } else {
+            p0 = points[idx];
+            p3 = points[idx + 1];
+            insertAt = idx + 1;
+        }
+
+        const hasCp = p0.cp2x !== undefined && p3.cp1x !== undefined;
 
         if (hasCp) {
-            const p0 = points[idx];
-            const p3 = points[idx + 1];
             const t = this.hoveredSegmentT;
             const split = this.splitCubicBezier(p0.x, p0.y, p0.cp2x, p0.cp2y, p3.cp1x, p3.cp1y, p3.x, p3.y, t);
 
@@ -5942,15 +6050,15 @@ class DrawingApp {
                 cp2x: split.newCp2.x,
                 cp2y: split.newCp2.y
             };
-            points.splice(idx + 1, 0, newPoint);
+            points.splice(insertAt, 0, newPoint);
 
             p3.cp1x = split.rightCp1.x;
             p3.cp1y = split.rightCp1.y;
 
-            this.selectedPointIndex = idx + 1;
+            this.selectedPointIndex = insertAt;
         } else {
-            points.splice(idx + 1, 0, { x: mx, y: my });
-            this.selectedPointIndex = idx + 1;
+            points.splice(insertAt, 0, { x: mx, y: my });
+            this.selectedPointIndex = insertAt;
         }
 
         this.viewportRender();
