@@ -3520,15 +3520,13 @@ class DrawingApp {
         return Math.acos(cosA) * 180 / Math.PI;
     }
 
-    simplifyCollinearPoints(points, angleThreshold) {
+    simplifyCollinearPoints(points) {
         if (points.length < 3) return points;
-        angleThreshold = angleThreshold || 170;
         const result = [points[0]];
         for (let i = 1; i < points.length - 1; i++) {
             const angle = this.computeAngle(points[i - 1], points[i], points[i + 1]);
-            if (angle < angleThreshold) {
-                result.push(points[i]);
-            }
+            if (angle > 178) continue;
+            result.push(points[i]);
         }
         result.push(points[points.length - 1]);
         return result;
