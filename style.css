@@ -325,9 +325,22 @@ input.spinbox:focus {
     justify-content: center;
     background: none;
     border: none;
-    color: var(--text-primary);
     cursor: pointer;
-    font-size: 14px;
+    font-size: 12px;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+}
+
+.layer-select-cb {
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.layer-select-cb:disabled {
+    cursor: default;
+    opacity: 0.5;
 }
 
 /* Gradient Editor */

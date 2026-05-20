@@ -211,11 +211,9 @@ class DrawingApp {
             document.getElementById('brushSizeValue').value = newSize;
             this.viewportRender();
 
-            if (this.selectedIndices && this.selectedIndices.length > 0) {
+            if (this.selectedCommands && this.selectedCommands.length > 0) {
                 this.saveState();
-                const activeLayer = this.layers[this.activeLayerIndex];
-                for (const idx of this.selectedIndices) {
-                    const cmd = activeLayer.vectorCommands[idx];
+                for (const cmd of this.selectedCommands) {
                     if (cmd) cmd.size = newSize;
                 }
                 this.viewportRender();
@@ -249,11 +247,10 @@ class DrawingApp {
             const newOpacity = parseInt(e.target.value) / 100;
             this.brushOpacity = newOpacity;
             document.getElementById('brushOpacityValue').value = e.target.value;
-            if (this.selectedIndices && this.selectedIndices.length > 0) {
+            if (this.selectedCommands && this.selectedCommands.length > 0) {
                 this.saveState();
-                const activeLayer = this.layers[this.activeLayerIndex];
-                for (const idx of this.selectedIndices) {
-                    activeLayer.vectorCommands[idx].opacity = newOpacity;
+                for (const cmd of this.selectedCommands) {
+                    cmd.opacity = newOpacity;
                 }
                 this.viewportRender();
             }
@@ -271,11 +268,9 @@ class DrawingApp {
         document.getElementById('colorPicker').addEventListener('input', (e) => {
             const newColor = e.target.value;
             this.brushColor = newColor;
-            if (this.selectedIndices && this.selectedIndices.length > 0) {
+            if (this.selectedCommands && this.selectedCommands.length > 0) {
                 this.saveState();
-                const activeLayer = this.layers[this.activeLayerIndex];
-                for (const idx of this.selectedIndices) {
-                    const cmd = activeLayer.vectorCommands[idx];
+                for (const cmd of this.selectedCommands) {
                     if (cmd.fillType && cmd.fillType !== 'solid' && cmd.gradient) {
                         for (const s of cmd.gradient.stops) s.color = newColor;
                     }
@@ -289,11 +284,9 @@ class DrawingApp {
 
         document.getElementById('fillTypeSelect').addEventListener('change', (e) => {
             const newType = e.target.value;
-            if (this.selectedIndices.length === 0) return;
+            if (this.selectedCommands.length === 0) return;
             this.saveState();
-            const activeLayer = this.layers[this.activeLayerIndex];
-            for (const idx of this.selectedIndices) {
-                const cmd = activeLayer.vectorCommands[idx];
+            for (const cmd of this.selectedCommands) {
                 if (cmd.type !== 'fill') continue;
                 if (newType === 'solid') {
                     delete cmd.fillType;
@@ -356,11 +349,9 @@ class DrawingApp {
         });
 
         document.getElementById('addStopBtn').addEventListener('click', () => {
-            if (this.selectedIndices.length === 0) return;
+            if (this.selectedCommands.length === 0) return;
             this.saveState();
-            const activeLayer = this.layers[this.activeLayerIndex];
-            for (const idx of this.selectedIndices) {
-                const cmd = activeLayer.vectorCommands[idx];
+            for (const cmd of this.selectedCommands) {
                 if (cmd.type === 'fill' && cmd.gradient) {
                     const stops = cmd.gradient.stops;
                     const offset = stops.length > 1 ? (stops[stops.length - 1].offset + stops[0].offset) / 2 : 0.5;
@@ -374,11 +365,9 @@ class DrawingApp {
         });
 
         document.getElementById('removeStopBtn').addEventListener('click', () => {
-            if (this.selectedIndices.length === 0) return;
+            if (this.selectedCommands.length === 0) return;
             this.saveState();
-            const activeLayer = this.layers[this.activeLayerIndex];
-            for (const idx of this.selectedIndices) {
-                const cmd = activeLayer.vectorCommands[idx];
+            for (const cmd of this.selectedCommands) {
                 if (cmd.type === 'fill' && cmd.gradient && cmd.gradient.stops.length > 2) {
                     cmd.gradient.stops.pop();
                 }
@@ -695,7 +684,7 @@ class DrawingApp {
             if (!layer.visible) continue;
 
             let alpha = layer.opacity;
-            if (dimOther && i !== this.activeLayerIndex) alpha *= 0.5;
+            if (this.currentTool === 'select' ? layer.selectable === false : (this.currentTool === 'fill' && i !== this.activeLayerIndex)) alpha *= 0.5;
 
             for (const cmd of layer.vectorCommands || []) {
                 vpCtx.globalAlpha = alpha * (cmd.opacity || 1);
@@ -845,7 +834,7 @@ class DrawingApp {
     }
 
     drawSelectionBox(ctx) {
-        if (!this.selectionBBox || this.selectedIndices.length === 0) return;
+        if (!this.selectionBBox || this.selectedCommands.length === 0) return;
 
         const bbox = this.selectionBBox;
         const hs = this.getHandleScale();
@@ -1120,25 +1109,49 @@ class DrawingApp {
         }
 
         let hitIndex = -1;
-        for (let i = commands.length - 1; i >= 0; i--) {
-            if (this.hitTestCommand(commands[i], coords.x, coords.y)) {
-                hitIndex = i;
-                break;
+        let hitLayer = -1;
+        let hitCmd = null;
+        const searchLayers = [];
+        for (let li = 0; li < this.layers.length; li++) {
+            if (this.layers[li].selectable !== false && this.layers[li].visible !== false) {
+                searchLayers.push(li);
             }
+        }
+        searchLayers.sort((a, b) => b - a);
+        for (const li of searchLayers) {
+            const cmds = this.layers[li].vectorCommands || [];
+            for (let i = cmds.length - 1; i >= 0; i--) {
+                if (this.hitTestCommand(cmds[i], coords.x, coords.y)) {
+                    hitIndex = i;
+                    hitLayer = li;
+                    hitCmd = cmds[i];
+                    break;
+                }
+            }
+            if (hitIndex >= 0) break;
         }
 
         if (hitIndex >= 0) {
-            const alreadySelected = this.selectedIndices.includes(hitIndex);
-            if (addMode && alreadySelected) {
-                this.selectedIndices = this.selectedIndices.filter(idx => idx !== hitIndex);
-                this.selectedCommands = commands.filter((_, i) => this.selectedIndices.includes(i));
-            } else if (!alreadySelected) {
-                if (addMode) {
-                    this.selectedIndices.push(hitIndex);
+            if (addMode) {
+                const alreadySelected = this.selectedCommands.includes(hitCmd);
+                if (alreadySelected) {
+                    this.selectedCommands = this.selectedCommands.filter(c => c !== hitCmd);
                 } else {
-                    this.selectedIndices = [hitIndex];
+                    this.selectedCommands.push(hitCmd);
                 }
-                this.selectedCommands = commands.filter((_, i) => this.selectedIndices.includes(i));
+                if (hitLayer === this.activeLayerIndex) {
+                    this.selectedIndices = this.selectedCommands
+                        .map(c => (this.layers[this.activeLayerIndex].vectorCommands || []).indexOf(c))
+                        .filter(i => i >= 0);
+                }
+            } else {
+                if (hitLayer !== this.activeLayerIndex) {
+                    this.activeLayerIndex = hitLayer;
+                    this.layers[hitLayer].selectable = true;
+                    this.updateLayerPanel();
+                }
+                this.selectedIndices = [hitIndex];
+                this.selectedCommands = [hitCmd];
             }
         } else {
             this.isSelecting = true;
@@ -1151,7 +1164,7 @@ class DrawingApp {
         this.updateDeleteButton();
         this.syncColorPickerToSelection();
         this.syncOpacityToSelection();
-        const hasBrush = this.selectedIndices.some(idx => ['brush', 'fill'].includes(activeLayer.vectorCommands[idx].type));
+        const hasBrush = this.selectedCommands.some(c => ['brush', 'fill'].includes(c.type));
         this.showPathEditControls(hasBrush);
         this.syncSizeToSelection();
         this.rebuildGradientStopsUI(this.getSelectedGradient());
@@ -1159,15 +1172,14 @@ class DrawingApp {
     }
 
     syncSizeToSelection() {
-        if (this.selectedIndices.length === 0) {
+        if (this.selectedCommands.length === 0) {
             document.getElementById('sizeToolGroup').style.display = 'block';
             document.getElementById('brushSize').disabled = false;
             return;
         }
 
-        const activeLayer = this.layers[this.activeLayerIndex];
-        const allFill = this.selectedIndices.every(idx => activeLayer.vectorCommands[idx].type === 'fill');
-        const allImage = this.selectedIndices.every(idx => activeLayer.vectorCommands[idx].type === 'image');
+        const allFill = this.selectedCommands.every(cmd => cmd.type === 'fill');
+        const allImage = this.selectedCommands.every(cmd => cmd.type === 'image');
 
         if (allFill || allImage) {
             document.getElementById('sizeToolGroup').style.display = 'none';
@@ -1176,8 +1188,7 @@ class DrawingApp {
             document.getElementById('brushSize').disabled = false;
 
             const sizes = new Set();
-            for (const idx of this.selectedIndices) {
-                const cmd = activeLayer.vectorCommands[idx];
+            for (const cmd of this.selectedCommands) {
                 if (cmd.size) sizes.add(cmd.size);
             }
 
@@ -1190,14 +1201,12 @@ class DrawingApp {
     }
 
     syncColorPickerToSelection() {
-        const hasSelection = this.selectedIndices.length > 0;
+        const hasSelection = this.selectedCommands.length > 0;
 
         if (hasSelection) {
-            const activeLayer = this.layers[this.activeLayerIndex];
             const colors = new Set();
 
-            for (const idx of this.selectedIndices) {
-                const cmd = activeLayer.vectorCommands[idx];
+            for (const cmd of this.selectedCommands) {
                 if (cmd.color) colors.add(cmd.color);
             }
 
@@ -1210,13 +1219,11 @@ class DrawingApp {
     }
 
     syncOpacityToSelection() {
-        if (this.selectedIndices.length === 0) return;
+        if (this.selectedCommands.length === 0) return;
 
-        const activeLayer = this.layers[this.activeLayerIndex];
         const opacities = new Set();
 
-        for (const idx of this.selectedIndices) {
-            const cmd = activeLayer.vectorCommands[idx];
+        for (const cmd of this.selectedCommands) {
             if (cmd.opacity !== undefined) opacities.add(cmd.opacity);
         }
 
@@ -1230,14 +1237,8 @@ class DrawingApp {
     }
 
     getSelectedGradient() {
-        const activeLayer = this.layers[this.activeLayerIndex];
-        if (!activeLayer) return null;
         for (const cmd of this.selectedCommands) {
             if (cmd.type === 'fill' && cmd.gradient) return cmd.gradient;
-        }
-        for (const idx of this.selectedIndices) {
-            const cmd = activeLayer.vectorCommands[idx];
-            if (cmd && cmd.type === 'fill' && cmd.gradient) return cmd.gradient;
         }
         return null;
     }
@@ -1247,16 +1248,14 @@ class DrawingApp {
         const gradEditor = document.getElementById('gradientEditor');
         const colorPicker = document.getElementById('colorPicker');
         const fillControls = document.getElementById('fillControls');
-        if (this.selectedIndices.length === 0) {
+        if (this.selectedCommands.length === 0) {
             fillControls.style.display = 'none';
             colorPicker.style.display = '';
             return;
         }
-        const activeLayer = this.layers[this.activeLayerIndex];
         let hasFillCmd = false;
         const types = new Set();
-        for (const idx of this.selectedIndices) {
-            const cmd = activeLayer.vectorCommands[idx];
+        for (const cmd of this.selectedCommands) {
             if (cmd.type === 'fill') {
                 hasFillCmd = true;
                 types.add(cmd.fillType || 'solid');
@@ -1288,7 +1287,7 @@ class DrawingApp {
     }
 
     syncGradientToSelection(grad) {
-        if (this.selectedIndices.length === 0) return;
+        if (this.selectedCommands.length === 0) return;
         const refGrad = grad || this.getSelectedGradient();
         if (!refGrad) return;
         const isRadial = refGrad.type === 'radial' || document.getElementById('fillTypeSelect').value === 'radial';
@@ -1321,11 +1320,9 @@ class DrawingApp {
     }
 
     updateGradientControl(prop, value) {
-        if (this.selectedIndices.length === 0) return;
+        if (this.selectedCommands.length === 0) return;
         this.saveState();
-        const activeLayer = this.layers[this.activeLayerIndex];
-        for (const idx of this.selectedIndices) {
-            const cmd = activeLayer.vectorCommands[idx];
+        for (const cmd of this.selectedCommands) {
             if (cmd.type !== 'fill' || !cmd.gradient) continue;
             if (prop === 'angle') {
                 const rad = value * Math.PI / 180;
@@ -1368,10 +1365,9 @@ class DrawingApp {
             colorInput.value = s.color;
             colorInput.addEventListener('input', () => {
                 this.saveState();
-                for (const idx of this.selectedIndices) {
-                    const c = activeLayer.vectorCommands[idx];
-                    if (c.type === 'fill' && c.fillType && c.gradient && c.gradient.stops[i]) {
-                        c.gradient.stops[i].color = colorInput.value;
+                for (const cmd of this.selectedCommands) {
+                    if (cmd.type === 'fill' && cmd.fillType && cmd.gradient && cmd.gradient.stops[i]) {
+                        cmd.gradient.stops[i].color = colorInput.value;
                     }
                 }
                 this.renderGradientPreview();
@@ -1383,10 +1379,9 @@ class DrawingApp {
             offsetSlider.min = 0; offsetSlider.max = 100; offsetSlider.value = Math.round(s.offset * 100);
             offsetSlider.addEventListener('input', () => {
                 const val = parseInt(offsetSlider.value) / 100;
-                for (const idx of this.selectedIndices) {
-                    const c = activeLayer.vectorCommands[idx];
-                    if (c.type === 'fill' && c.fillType && c.gradient && c.gradient.stops[i]) {
-                        c.gradient.stops[i].offset = val;
+                for (const cmd of this.selectedCommands) {
+                    if (cmd.type === 'fill' && cmd.fillType && cmd.gradient && cmd.gradient.stops[i]) {
+                        cmd.gradient.stops[i].offset = val;
                     }
                 }
                 offsetVal.value = Math.round(val * 100);
@@ -1416,10 +1411,9 @@ class DrawingApp {
             opacitySlider.min = 0; opacitySlider.max = 100; opacitySlider.value = Math.round((s.opacity !== undefined ? s.opacity : 1) * 100);
             opacitySlider.addEventListener('input', () => {
                 const val = parseInt(opacitySlider.value) / 100;
-                for (const idx of this.selectedIndices) {
-                    const c = activeLayer.vectorCommands[idx];
-                    if (c.type === 'fill' && c.fillType && c.gradient && c.gradient.stops[i]) {
-                        c.gradient.stops[i].opacity = val;
+                for (const cmd of this.selectedCommands) {
+                    if (cmd.type === 'fill' && cmd.fillType && cmd.gradient && cmd.gradient.stops[i]) {
+                        cmd.gradient.stops[i].opacity = val;
                     }
                 }
                 opacityVal.value = Math.round(val * 100);
@@ -1541,12 +1535,17 @@ class DrawingApp {
 
             if (x2 - x1 > 2 && y2 - y1 > 2) {
                 this.clearSelection();
-                const activeLayer = this.layers[this.activeLayerIndex];
-                const commands = activeLayer.vectorCommands || [];
-                for (let i = 0; i < commands.length; i++) {
-                    if (this.commandInRect(commands[i], x1, y1, x2, y2)) {
-                        this.selectedIndices.push(i);
-                        this.selectedCommands.push(commands[i]);
+                for (let li = 0; li < this.layers.length; li++) {
+                    const layer = this.layers[li];
+                    if (layer.visible === false || layer.selectable === false) continue;
+                    const commands = layer.vectorCommands || [];
+                    for (let i = 0; i < commands.length; i++) {
+                        if (this.commandInRect(commands[i], x1, y1, x2, y2)) {
+                            if (li === this.activeLayerIndex) {
+                                this.selectedIndices.push(i);
+                            }
+                            this.selectedCommands.push(commands[i]);
+                        }
                     }
                 }
                 this.updateSelectionBBox();
@@ -1719,6 +1718,7 @@ class DrawingApp {
         }
 
         if (this.currentStroke && this.currentStroke.points.length > 0) {
+            this.currentStroke.points = this.simplifyCollinearPoints(this.currentStroke.points);
             if (this.currentStroke.points.length > 2) {
                 this.currentStroke.points = this.fitBrushCurve(this.currentStroke.points);
             }
@@ -1890,7 +1890,7 @@ class DrawingApp {
             if (!layer.visible) continue;
 
             let alpha = layer.opacity;
-            if (dimOther && i !== this.activeLayerIndex) alpha *= 0.5;
+            if (this.currentTool === 'select' ? layer.selectable === false : (this.currentTool === 'fill' && i !== this.activeLayerIndex)) alpha *= 0.5;
 
             for (const cmd of layer.vectorCommands || []) {
                 ctx.globalAlpha = alpha * (cmd.opacity !== undefined ? cmd.opacity : 1);
@@ -1966,7 +1966,7 @@ class DrawingApp {
         const moveBackBtn = document.getElementById('moveBackBtn');
         const moveForwardBtn = document.getElementById('moveForwardBtn');
         const duplicateBtn = document.getElementById('duplicateBtn');
-        const visible = this.selectedIndices.length > 0;
+        const visible = this.selectedCommands.length > 0;
 
         if (deleteBtn) deleteBtn.style.display = visible ? 'flex' : 'none';
         if (convertBtn) convertBtn.style.display = visible ? 'flex' : 'none';
@@ -2251,9 +2251,7 @@ class DrawingApp {
     }
 
     moveSelected(dx, dy) {
-        const activeLayer = this.layers[this.activeLayerIndex];
-        for (const idx of this.selectedIndices) {
-            const cmd = activeLayer.vectorCommands[idx];
+        for (const cmd of this.selectedCommands) {
             if (cmd.type === 'brush' || cmd.type === 'fill') {
                 this.forEachFillPoint(cmd.points, p => {
                     p.x += dx;
@@ -2276,14 +2274,12 @@ class DrawingApp {
     }
 
     rotateSelected(angle) {
-        const activeLayer = this.layers[this.activeLayerIndex];
         const cx = this.selectionBBox.cx;
         const cy = this.selectionBBox.cy;
         const cos = Math.cos(angle);
         const sin = Math.sin(angle);
 
-        for (const idx of this.selectedIndices) {
-            const cmd = activeLayer.vectorCommands[idx];
+        for (const cmd of this.selectedCommands) {
             if (cmd.type === 'brush' || cmd.type === 'fill') {
                 this.forEachFillPoint(cmd.points, p => {
                     const dx = p.x - cx, dy = p.y - cy;
@@ -2556,8 +2552,7 @@ class DrawingApp {
         const scaleX = newBBox.w / bbox.w;
         const scaleY = newBBox.h / bbox.h;
 
-        for (const idx of this.selectedIndices) {
-            const cmd = activeLayer.vectorCommands[idx];
+        for (const cmd of this.selectedCommands) {
             if (cmd.type === 'brush' || cmd.type === 'fill') {
                 this.forEachFillPoint(cmd.points, p => {
                     p.x = newBBox.x + (p.x - bbox.x) * scaleX;
@@ -3525,6 +3520,20 @@ class DrawingApp {
         return Math.acos(cosA) * 180 / Math.PI;
     }
 
+    simplifyCollinearPoints(points, angleThreshold) {
+        if (points.length < 3) return points;
+        angleThreshold = angleThreshold || 170;
+        const result = [points[0]];
+        for (let i = 1; i < points.length - 1; i++) {
+            const angle = this.computeAngle(points[i - 1], points[i], points[i + 1]);
+            if (angle < angleThreshold) {
+                result.push(points[i]);
+            }
+        }
+        result.push(points[points.length - 1]);
+        return result;
+    }
+
     fitBrushCurve(points) {
         if (points.length <= 2) {
             return points.map(p => ({ x: p.x, y: p.y }));
@@ -3591,12 +3600,17 @@ class DrawingApp {
             opacity: 1,
             blendMode: 'source-over',
             visible: true,
+            selectable: true,
             vectorCommands: []
         };
 
         const insertAt = Math.min(this.activeLayerIndex, this.layers.length);
         this.layers.splice(insertAt, 0, layer);
+        if (this.layers.length > 1) {
+            this.layers[this.activeLayerIndex].selectable = false;
+        }
         this.activeLayerIndex = insertAt;
+        this.layers[this.activeLayerIndex].selectable = true;
         this.viewportRender();
         this.updateLayerPanel();
     }
@@ -3691,6 +3705,7 @@ class DrawingApp {
             opacity: layer.opacity,
             blendMode: layer.blendMode,
             visible: layer.visible,
+            selectable: layer.selectable,
             vectorCommands: JSON.parse(JSON.stringify(layer.vectorCommands || []))
         }));
 
@@ -3717,6 +3732,7 @@ class DrawingApp {
             opacity: layer.opacity,
             blendMode: layer.blendMode,
             visible: layer.visible,
+            selectable: layer.selectable,
             vectorCommands: JSON.parse(JSON.stringify(layer.vectorCommands || []))
         }));
 
@@ -3740,6 +3756,7 @@ class DrawingApp {
             opacity: layer.opacity,
             blendMode: layer.blendMode,
             visible: layer.visible,
+            selectable: layer.selectable,
             vectorCommands: JSON.parse(JSON.stringify(layer.vectorCommands || []))
         }));
 
@@ -3760,6 +3777,7 @@ class DrawingApp {
             opacity: s.opacity,
             blendMode: s.blendMode,
             visible: s.visible,
+            selectable: s.selectable !== false,
             vectorCommands: s.vectorCommands || []
         }));
 
@@ -3782,9 +3800,13 @@ class DrawingApp {
             const layerItem = document.createElement('div');
             layerItem.className = 'layer-item' + (index === this.activeLayerIndex ? ' active' : '');
             layerItem.addEventListener('click', (e) => {
-                if (!e.target.closest('.layer-visibility') && !e.target.closest('.layer-name-input')) {
+                if (!e.target.closest('.layer-visibility') && !e.target.closest('.layer-name-input') && !e.target.closest('.layer-select-cb')) {
                     if (this.pathEditMode) this.togglePathEdit();
+                    if (index !== this.activeLayerIndex) {
+                        this.layers.forEach(l => l.selectable = false);
+                    }
                     this.activeLayerIndex = index;
+                    this.layers[index].selectable = true;
                     this.updateLayerPanel();
                     document.getElementById('layerOpacity').value = Math.round(layer.opacity * 100);
                     document.getElementById('layerOpacityValue').value = Math.round(layer.opacity * 100);
@@ -3793,6 +3815,18 @@ class DrawingApp {
                     this.viewportRender();
                 }
             });
+
+            const selCb = document.createElement('input');
+            selCb.type = 'checkbox';
+            selCb.className = 'layer-select-cb';
+            selCb.checked = index === this.activeLayerIndex ? true : (layer.selectable !== false);
+            selCb.disabled = index === this.activeLayerIndex;
+            selCb.addEventListener('change', (e) => {
+                e.stopPropagation();
+                layer.selectable = selCb.checked;
+                this.updateLayerPanel();
+            });
+            layerItem.appendChild(selCb);
 
             const visBtn = document.createElement('button');
             visBtn.className = 'layer-visibility';
@@ -5212,10 +5246,13 @@ ${svgContent}
     }
 
     deleteSelected() {
-        if (this.selectedIndices.length === 0) return;
+        if (this.selectedCommands.length === 0) return;
         this.saveState();
-        const activeLayer = this.layers[this.activeLayerIndex];
-        activeLayer.vectorCommands = activeLayer.vectorCommands.filter((_, i) => !this.selectedIndices.includes(i));
+        for (let li = 0; li < this.layers.length; li++) {
+            const cmds = this.layers[li].vectorCommands;
+            if (!cmds) continue;
+            this.layers[li].vectorCommands = cmds.filter(c => !this.selectedCommands.includes(c));
+        }
         this.showPathEditControls(false);
         this.clearSelection();
         this.viewportRender();
@@ -5260,23 +5297,22 @@ ${svgContent}
         this.updateDeleteButton();
         this.syncColorPickerToSelection();
         this.syncOpacityToSelection();
-        const hasBrush = this.selectedIndices.some(idx => ['brush', 'fill'].includes(activeLayer.vectorCommands[idx].type));
+        const hasBrush = this.selectedCommands.some(c => ['brush', 'fill'].includes(c.type));
         this.showPathEditControls(hasBrush);
         this.syncSizeToSelection();
         this.viewportRender();
     }
 
     duplicateSelected() {
-        if (this.selectedIndices.length === 0) return;
+        if (this.selectedCommands.length === 0) return;
         this.saveState();
         const cmds = this.layers[this.activeLayerIndex].vectorCommands;
-        const sorted = [...this.selectedIndices].sort((a, b) => a - b);
-        const copies = sorted.map(i => JSON.parse(JSON.stringify(cmds[i])));
-        for (let k = 0; k < sorted.length; k++) {
-            cmds.splice(sorted[k] + k + 1, 0, copies[k]);
+        const copies = this.selectedCommands.map(c => JSON.parse(JSON.stringify(c)));
+        for (let k = 0; k < copies.length; k++) {
+            cmds.push(copies[k]);
         }
-        this.selectedIndices = sorted.map((_, k) => sorted[k] + k + 1);
-        this.selectedCommands = this.selectedIndices.map(i => cmds[i]);
+        this.selectedCommands = copies;
+        this.selectedIndices = copies.map(c => cmds.indexOf(c)).filter(i => i >= 0);
         this.updateSelectionBBox();
         this.updateDeleteButton();
         this.viewportRender();
@@ -5319,80 +5355,72 @@ ${svgContent}
     }
 
     moveSelectedToLayer(targetIndex) {
-        if (this.selectedIndices.length === 0 || targetIndex === this.activeLayerIndex) return;
+        if (this.selectedCommands.length === 0 || targetIndex === this.activeLayerIndex) return;
         this.saveState();
         const sourceLayer = this.layers[this.activeLayerIndex];
         const targetLayer = this.layers[targetIndex];
-
         targetLayer.vectorCommands = targetLayer.vectorCommands || [];
-        const selectedCommands = [];
-        const remainingIndices = [];
 
-        sourceLayer.vectorCommands.forEach((cmd, i) => {
-            if (this.selectedIndices.includes(i)) {
-                selectedCommands.push(cmd);
+        const toMove = [];
+        const newSourceCommands = [];
+        for (const cmd of sourceLayer.vectorCommands || []) {
+            if (this.selectedCommands.includes(cmd)) {
+                toMove.push(cmd);
             } else {
-                remainingIndices.push(cmd);
+                newSourceCommands.push(cmd);
             }
-        });
-
-        targetLayer.vectorCommands.push(...selectedCommands);
-        sourceLayer.vectorCommands = remainingIndices;
+        }
+        targetLayer.vectorCommands.push(...toMove);
+        sourceLayer.vectorCommands = newSourceCommands;
         this.clearSelection();
         this.viewportRender();
         this.updateLayerPanel();
     }
 
     centerSelectionHorizontal() {
-        if (this.selectedIndices.length === 0) return;
+        if (this.selectedCommands.length === 0) return;
         const bbox = this.selectionBBox;
         if (!bbox) return;
         this.saveState();
-        const layer = this.layers[this.activeLayerIndex];
         const centerX = this.canvasWidth / 2;
         const offset = centerX - (bbox.x + bbox.w / 2);
-        layer.vectorCommands.forEach((cmd, i) => {
-            if (this.selectedIndices.includes(i)) {
-                if (cmd.type === 'brush' || cmd.type === 'fill') {
-                    this.forEachFillPoint(cmd.points, p => {
-                        p.x += offset;
-                        if (p.cp1x !== undefined) p.cp1x += offset;
-                        if (p.cp2x !== undefined) p.cp2x += offset;
-                    });
-                } else if (cmd.type === 'image') {
-                    cmd.x += offset;
-                } else {
-                    cmd.x1 += offset; cmd.x2 += offset;
-                }
+        for (const cmd of this.selectedCommands) {
+            if (cmd.type === 'brush' || cmd.type === 'fill') {
+                this.forEachFillPoint(cmd.points, p => {
+                    p.x += offset;
+                    if (p.cp1x !== undefined) p.cp1x += offset;
+                    if (p.cp2x !== undefined) p.cp2x += offset;
+                });
+            } else if (cmd.type === 'image') {
+                cmd.x += offset;
+            } else {
+                cmd.x1 += offset; cmd.x2 += offset;
             }
-        });
+        }
         this.viewportRender();
         this.updateSelectionBBox();
     }
 
     centerSelectionVertical() {
-        if (this.selectedIndices.length === 0) return;
+        if (this.selectedCommands.length === 0) return;
         const bbox = this.selectionBBox;
         if (!bbox) return;
         this.saveState();
-        const layer = this.layers[this.activeLayerIndex];
         const centerY = this.canvasHeight / 2;
         const offset = centerY - (bbox.y + bbox.h / 2);
-        layer.vectorCommands.forEach((cmd, i) => {
-            if (this.selectedIndices.includes(i)) {
-                if (cmd.type === 'brush' || cmd.type === 'fill') {
-                    this.forEachFillPoint(cmd.points, p => {
-                        p.y += offset;
-                        if (p.cp1y !== undefined) p.cp1y += offset;
-                        if (p.cp2y !== undefined) p.cp2y += offset;
-                    });
-                } else if (cmd.type === 'image') {
-                    cmd.y += offset;
-                } else {
-                    cmd.y1 += offset; cmd.y2 += offset;
-                }
+        for (const cmd of this.selectedCommands) {
+            if (cmd.type === 'brush' || cmd.type === 'fill') {
+                this.forEachFillPoint(cmd.points, p => {
+                    p.y += offset;
+                    if (p.cp1y !== undefined) p.cp1y += offset;
+                    if (p.cp2y !== undefined) p.cp2y += offset;
+                });
+            } else if (cmd.type === 'image') {
+                cmd.y += offset;
+            } else {
+                cmd.y1 += offset; cmd.y2 += offset;
             }
-        });
+        }
         this.viewportRender();
         this.updateSelectionBBox();
     }
@@ -5401,7 +5429,7 @@ ${svgContent}
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
 
         if (e.key === 'A' && e.shiftKey && (e.ctrlKey || e.metaKey)) {
-            if (this.currentTool === 'select' && this.selectedIndices.length > 0) {
+            if (this.currentTool === 'select' && this.selectedCommands.length > 0) {
                 e.preventDefault();
                 this.clearSelection();
             }
@@ -5430,11 +5458,9 @@ ${svgContent}
                     this.brushSize = newSize;
                     slider.value = newSize;
                     document.getElementById('brushSizeValue').value = newSize;
-                    if (this.selectedIndices && this.selectedIndices.length > 0) {
+                    if (this.selectedCommands && this.selectedCommands.length > 0) {
                         this.saveState();
-                        const activeLayer = this.layers[this.activeLayerIndex];
-                        for (const idx of this.selectedIndices) {
-                            const cmd = activeLayer.vectorCommands[idx];
+                        for (const cmd of this.selectedCommands) {
                             if (cmd) cmd.size = newSize;
                         }
                     }
@@ -5478,7 +5504,7 @@ ${svgContent}
                 this.togglePathEdit();
                 return;
             }
-            if (this.currentTool === 'select' && this.selectedIndices.length > 0) {
+            if (this.currentTool === 'select' && this.selectedCommands.length > 0) {
                 e.preventDefault();
                 this.clearSelection();
             }
@@ -5491,7 +5517,7 @@ ${svgContent}
                 this.deleteSelectedPoint();
                 return;
             }
-            if (this.currentTool === 'select' && this.selectedIndices.length > 0) {
+            if (this.currentTool === 'select' && this.selectedCommands.length > 0) {
                 e.preventDefault();
                 this.deleteSelected();
             }
@@ -5512,9 +5538,21 @@ ${svgContent}
             } else if (e.key === 'a' || e.key === 'A') {
                 e.preventDefault();
                 if (this.currentTool === 'select') {
-                    const activeLayer = this.layers[this.activeLayerIndex];
-                    this.selectedIndices = (activeLayer.vectorCommands || []).map((_, i) => i);
-                    this.selectedCommands = [...activeLayer.vectorCommands];
+                    let targetLayer = this.layers[this.activeLayerIndex];
+                    if (targetLayer.selectable === false) {
+                        for (let li = 0; li < this.layers.length; li++) {
+                            if (this.layers[li].selectable !== false && this.layers[li].visible !== false) {
+                                this.layers[this.activeLayerIndex].selectable = false;
+                                this.activeLayerIndex = li;
+                                this.layers[li].selectable = true;
+                                targetLayer = this.layers[li];
+                                this.updateLayerPanel();
+                                break;
+                            }
+                        }
+                    }
+                    this.selectedIndices = (targetLayer.vectorCommands || []).map((_, i) => i);
+                    this.selectedCommands = [...targetLayer.vectorCommands];
                     this.updateSelectionBBox();
                     this.updateDeleteButton();
                     this.viewportRender();
@@ -5602,7 +5640,7 @@ ${svgContent}
                 this.moveSelectedPoint(dx, dy);
                 return;
             }
-            if (this.currentTool === 'select' && this.selectedIndices.length > 0) {
+            if (this.currentTool === 'select' && this.selectedCommands.length > 0) {
                 e.preventDefault();
                 this.saveState();
                 this.moveSelected(dx, dy);
@@ -5613,18 +5651,18 @@ ${svgContent}
 
         if (e.key === 'PageUp') {
             e.preventDefault();
-            if (this.selectedIndices.length > 0) this.moveSelectedForward();
+            if (this.selectedCommands.length > 0) this.moveSelectedForward();
             return;
         }
         if (e.key === 'PageDown') {
             e.preventDefault();
-            if (this.selectedIndices.length > 0) this.moveSelectedBackward();
+            if (this.selectedCommands.length > 0) this.moveSelectedBackward();
             return;
         }
 
         switch (e.key.toLowerCase()) {
             case 'e':
-                if (this.selectedIndices.length > 0) {
+                if (this.selectedCommands.length > 0) {
                     e.preventDefault();
                     this.togglePathEdit();
                 }
@@ -5654,10 +5692,9 @@ ${svgContent}
     }
 
     togglePathEdit() {
-        if (this.selectedIndices.length === 0) return;
+        if (this.selectedCommands.length === 0) return;
 
-        const activeLayer = this.layers[this.activeLayerIndex];
-        const hasEditable = this.selectedIndices.some(idx => ['brush', 'fill'].includes(activeLayer.vectorCommands[idx].type));
+        const hasEditable = this.selectedCommands.some(c => ['brush', 'fill'].includes(c.type));
 
         if (!hasEditable) return;
 
@@ -5665,9 +5702,23 @@ ${svgContent}
         document.getElementById('pathEditBtn').classList.toggle('active', this.pathEditMode);
 
         if (this.pathEditMode) {
-            const firstCmd = this.selectedIndices.find(idx => ['brush', 'fill'].includes(activeLayer.vectorCommands[idx].type));
-            this.editingPathCmd = activeLayer.vectorCommands[firstCmd];
-            this.editingPathIndex = firstCmd;
+            const firstCmdIdx = this.selectedCommands.findIndex(c => ['brush', 'fill'].includes(c.type));
+            if (firstCmdIdx < 0) return;
+            this.editingPathCmd = this.selectedCommands[firstCmdIdx];
+            // find which layer the editing command belongs to
+            for (let li = 0; li < this.layers.length; li++) {
+                const idx = (this.layers[li].vectorCommands || []).indexOf(this.editingPathCmd);
+                if (idx >= 0) {
+                    if (li !== this.activeLayerIndex) {
+                        this.layers[this.activeLayerIndex].selectable = false;
+                        this.activeLayerIndex = li;
+                        this.layers[li].selectable = true;
+                        this.updateLayerPanel();
+                    }
+                    break;
+                }
+            }
+            this.editingPathIndex = (this.layers[this.activeLayerIndex].vectorCommands || []).indexOf(this.editingPathCmd);
             if (this.editingPathCmd.type === 'fill' && !Array.isArray(this.editingPathCmd.points)) {
                 this._savedFillHoles = this.editingPathCmd.points.holes || [];
                 this.editingPathCmd.points = this.editingPathCmd.points.outer;
