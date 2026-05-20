@@ -5538,21 +5538,17 @@ ${svgContent}
             } else if (e.key === 'a' || e.key === 'A') {
                 e.preventDefault();
                 if (this.currentTool === 'select') {
-                    let targetLayer = this.layers[this.activeLayerIndex];
-                    if (targetLayer.selectable === false) {
-                        for (let li = 0; li < this.layers.length; li++) {
-                            if (this.layers[li].selectable !== false && this.layers[li].visible !== false) {
-                                this.layers[this.activeLayerIndex].selectable = false;
-                                this.activeLayerIndex = li;
-                                this.layers[li].selectable = true;
-                                targetLayer = this.layers[li];
-                                this.updateLayerPanel();
-                                break;
-                            }
+                    this.selectedIndices = [];
+                    this.selectedCommands = [];
+                    for (let li = 0; li < this.layers.length; li++) {
+                        const layer = this.layers[li];
+                        if (layer.visible === false || layer.selectable === false) continue;
+                        const cmds = layer.vectorCommands || [];
+                        if (li === this.activeLayerIndex) {
+                            this.selectedIndices = cmds.map((_, i) => i);
                         }
+                        this.selectedCommands.push(...cmds);
                     }
-                    this.selectedIndices = (targetLayer.vectorCommands || []).map((_, i) => i);
-                    this.selectedCommands = [...targetLayer.vectorCommands];
                     this.updateSelectionBBox();
                     this.updateDeleteButton();
                     this.viewportRender();
