@@ -1621,6 +1621,22 @@ class DrawingApp {
         }
 
         if (this.currentTool === 'select') {
+            if (!this.isSelecting) {
+                let hit = false;
+                for (let li = this.layers.length - 1; li >= 0; li--) {
+                    const layer = this.layers[li];
+                    if (layer.visible === false || layer.selectable === false) continue;
+                    const cmds = layer.vectorCommands || [];
+                    for (let i = cmds.length - 1; i >= 0; i--) {
+                        if (this.hitTestCommand(cmds[i], coords.x, coords.y)) {
+                            hit = true;
+                            break;
+                        }
+                    }
+                    if (hit) break;
+                }
+                this.viewportCanvas.style.cursor = hit ? 'copy' : 'default';
+            }
             this.handleSelectMouseMove(e, coords);
             this.viewportRender();
             return;
@@ -1925,7 +1941,7 @@ class DrawingApp {
         document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
             btn.classList.toggle('active', btn.dataset.tool === tool);
         });
-        this.viewportCanvas.style.cursor = tool === 'select' ? 'copy' : 'crosshair';
+        this.viewportCanvas.style.cursor = tool === 'select' ? 'default' : 'crosshair';
         if (tool !== 'select') {
             this.clearSelection();
         }
