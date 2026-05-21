@@ -3629,11 +3629,9 @@ class DrawingApp {
             vectorCommands: []
         };
 
+        this.layers.forEach(l => l.selectable = false);
         const insertAt = Math.min(this.activeLayerIndex, this.layers.length);
         this.layers.splice(insertAt, 0, layer);
-        if (this.layers.length > 1) {
-            this.layers[this.activeLayerIndex].selectable = false;
-        }
         this.activeLayerIndex = insertAt;
         this.layers[this.activeLayerIndex].selectable = true;
         this.viewportRender();
