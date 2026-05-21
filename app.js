@@ -3844,7 +3844,8 @@ class DrawingApp {
 
             const visBtn = document.createElement('button');
             visBtn.className = 'layer-visibility';
-            visBtn.textContent = layer.visible ? '\uD83D\uDC41' : '\uD83D\uDC41\u200D\uD83D\uDDE8';
+            visBtn.textContent = '\uD83D\uDC41\uFE0F';
+            visBtn.style.opacity = layer.visible ? '1' : '0.3';
             visBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 layer.visible = !layer.visible;
