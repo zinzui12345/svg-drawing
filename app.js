@@ -23,6 +23,8 @@ class DrawingApp {
         this.brushColor = '#000000';
         this.brushSize = 10;
         this.brushOpacity = 1;
+        this.brushLineCap = 'round';
+        this.brushLineJoin = 'round';
         this.expandOffset = 2;
 
         this.penPoints = [];
@@ -983,7 +985,9 @@ class DrawingApp {
                 color: this.brushColor,
                 size: this.brushSize,
                 opacity: this.brushOpacity,
-                points: [{ x: coords.x, y: coords.y }]
+                points: [{ x: coords.x, y: coords.y }],
+                lineCap: this.brushLineCap,
+                lineJoin: this.brushLineJoin
             };
             this.viewportRender();
         }
@@ -1022,7 +1026,9 @@ class DrawingApp {
             color: this.brushColor,
             size: this.brushSize,
             opacity: this.brushOpacity,
-            points: processedPoints
+            points: processedPoints,
+            lineCap: this.brushLineCap,
+            lineJoin: this.brushLineJoin
         });
 
         this.penPoints = [];
@@ -1697,7 +1703,8 @@ class DrawingApp {
             let cmd;
             if (this.currentTool === 'line') {
                 cmd = { type: 'line', color: this.brushColor, size: this.brushSize, opacity: this.brushOpacity,
-                    x1: this.shapeStart.x, y1: this.shapeStart.y, x2: coords.x, y2: coords.y };
+                    x1: this.shapeStart.x, y1: this.shapeStart.y, x2: coords.x, y2: coords.y,
+                    lineCap: this.brushLineCap, lineJoin: this.brushLineJoin };
             } else if (this.currentTool === 'rect') {
                 let rx1 = this.shapeStart.x;
                 let ry1 = this.shapeStart.y;
@@ -1715,7 +1722,8 @@ class DrawingApp {
                 const x2 = Math.max(rx1, rx2);
                 const y2 = Math.max(ry1, ry2);
                 cmd = { type: 'brush', color: this.brushColor, size: this.brushSize, opacity: this.brushOpacity,
-                    points: [{ x: x1, y: y1 }, { x: x2, y: y1 }, { x: x2, y: y2 }, { x: x1, y: y2 }], closed: true };
+                    points: [{ x: x1, y: y1 }, { x: x2, y: y1 }, { x: x2, y: y2 }, { x: x1, y: y2 }], closed: true,
+                    lineCap: this.brushLineCap, lineJoin: this.brushLineJoin };
             } else {
                 const cx = (this.shapeStart.x + coords.x) / 2;
                 const cy = (this.shapeStart.y + coords.y) / 2;
@@ -1727,7 +1735,8 @@ class DrawingApp {
                     ry = r;
                 }
                 cmd = { type: 'brush', color: this.brushColor, size: this.brushSize, opacity: this.brushOpacity,
-                    points: this.makeEllipsePoints(cx, cy, rx, ry), closed: true };
+                    points: this.makeEllipsePoints(cx, cy, rx, ry), closed: true,
+                    lineCap: this.brushLineCap, lineJoin: this.brushLineJoin };
             }
             activeLayer.vectorCommands.push(cmd);
             this.shapeStart = null;
@@ -2612,8 +2621,8 @@ class DrawingApp {
             } else {
                 ctx.strokeStyle = cmd.color;
                 ctx.lineWidth = cmd.size;
-                ctx.lineCap = 'round';
-                ctx.lineJoin = 'round';
+                ctx.lineCap = cmd.lineCap || 'round';
+                ctx.lineJoin = cmd.lineJoin || 'round';
                 ctx.beginPath();
                 ctx.moveTo(cmd.points[0].x, cmd.points[0].y);
                 for (let i = 1; i < cmd.points.length; i++) {
@@ -2672,7 +2681,8 @@ class DrawingApp {
         } else if (cmd.type === 'line') {
             ctx.strokeStyle = cmd.color;
             ctx.lineWidth = cmd.size;
-            ctx.lineCap = 'round';
+            ctx.lineCap = cmd.lineCap || 'round';
+            ctx.lineJoin = cmd.lineJoin || 'round';
             ctx.beginPath();
             ctx.moveTo(cmd.x1, cmd.y1);
             ctx.lineTo(cmd.x2, cmd.y2);
@@ -2680,7 +2690,8 @@ class DrawingApp {
         } else if (cmd.type === 'rect') {
             ctx.strokeStyle = cmd.color;
             ctx.lineWidth = cmd.size;
-            ctx.lineJoin = 'round';
+            ctx.lineCap = cmd.lineCap || 'round';
+            ctx.lineJoin = cmd.lineJoin || 'round';
             ctx.beginPath();
             ctx.rect(Math.min(cmd.x1, cmd.x2), Math.min(cmd.y1, cmd.y2), Math.abs(cmd.x2 - cmd.x1), Math.abs(cmd.y2 - cmd.y1));
             ctx.stroke();
@@ -4010,7 +4021,7 @@ class DrawingApp {
                                     d += ' Z';
                                 }
                             }
-                            svgParts.push(`    <path d="${d}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="${cmd.opacity}"/>`);
+                            svgParts.push(`    <path d="${d}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="${cmd.lineCap || 'round'}" stroke-linejoin="${cmd.lineJoin || 'round'}" fill="none" opacity="${cmd.opacity}"/>`);
                         }
                     } else if (cmd.type === 'fill') {
                         const pts = cmd.points;
@@ -4051,19 +4062,19 @@ class DrawingApp {
                         }
                         svgParts.push(`    <path d="${d}" fill="${fillAttr}" stroke="none" opacity="${cmd.opacity}" fill-rule="evenodd"/>`);
                     } else if (cmd.type === 'line') {
-                        svgParts.push(`    <line x1="${cmd.x1.toFixed(2)}" y1="${cmd.y1.toFixed(2)}" x2="${cmd.x2.toFixed(2)}" y2="${cmd.y2.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="round" opacity="${cmd.opacity}"/>`);
+                        svgParts.push(`    <line x1="${cmd.x1.toFixed(2)}" y1="${cmd.y1.toFixed(2)}" x2="${cmd.x2.toFixed(2)}" y2="${cmd.y2.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="${cmd.lineCap || 'round'}" stroke-linejoin="${cmd.lineJoin || 'round'}" opacity="${cmd.opacity}"/>`);
                     } else if (cmd.type === 'rect') {
                         const x = Math.min(cmd.x1, cmd.x2);
                         const y = Math.min(cmd.y1, cmd.y2);
                         const w = Math.abs(cmd.x2 - cmd.x1);
                         const h = Math.abs(cmd.y2 - cmd.y1);
-                        svgParts.push(`    <rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${w.toFixed(2)}" height="${h.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" fill="none" stroke-linejoin="round" opacity="${cmd.opacity}"/>`);
+                        svgParts.push(`    <rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${w.toFixed(2)}" height="${h.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" fill="none" stroke-linecap="${cmd.lineCap || 'round'}" stroke-linejoin="${cmd.lineJoin || 'round'}" opacity="${cmd.opacity}"/>`);
                     } else if (cmd.type === 'circle') {
                         const cx = (cmd.x1 + cmd.x2) / 2;
                         const cy = (cmd.y1 + cmd.y2) / 2;
                         const rx = Math.abs(cmd.x2 - cmd.x1) / 2;
                         const ry = Math.abs(cmd.y2 - cmd.y1) / 2;
-                        svgParts.push(`    <ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" fill="none" opacity="${cmd.opacity}"/>`);
+                        svgParts.push(`    <ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" fill="none" stroke-linecap="${cmd.lineCap || 'round'}" stroke-linejoin="${cmd.lineJoin || 'round'}" opacity="${cmd.opacity}"/>`);
                     } else if (cmd.type === 'image') {
                         const img = this.imageCache[cmd.src];
                         if (img) {
@@ -4576,6 +4587,24 @@ ${svgContent}
             const stroke = this.getStyleValue(el, 'stroke', style);
             const fill = this.getStyleValue(el, 'fill', style);
             const strokeWidth = parseFloat(this.getStyleValue(el, 'stroke-width', style)) || 2;
+            const lineCap = (function(){
+                for (let e = el; e; e = e.parentElement) {
+                    const s = e.getAttribute('style');
+                    if (s) { const m = s.match(/stroke-linecap\s*:\s*(\w+)/); if (m) return m[1]; }
+                    const v = e.getAttribute('stroke-linecap');
+                    if (v) return v;
+                }
+                return 'round';
+            })();
+            const lineJoin = (function(){
+                for (let e = el; e; e = e.parentElement) {
+                    const s = e.getAttribute('style');
+                    if (s) { const m = s.match(/stroke-linejoin\s*:\s*(\w+)/); if (m) return m[1]; }
+                    const v = e.getAttribute('stroke-linejoin');
+                    if (v) return v;
+                }
+                return 'round';
+            })();
 
             const fillInfo = this.resolveFillValue(fill, svgGradients);
             const hasFill = !!fillInfo;
@@ -4622,14 +4651,19 @@ ${svgContent}
                 const rectPts = [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
                 if (hasStroke) {
                     commands.push({
-                        type: 'brush', color: stroke, size: strokeWidth * (scaleX + scaleY) / 2,
-                        opacity, points: rectPts, closed: true
+                        type: 'brush', color: stroke,
+                        size: strokeWidth * (scaleX + scaleY) / 2,
+                        opacity,
+                        points: rectPts,
+                        closed: true,
+                        lineCap, lineJoin
                     });
                 }
                 if (!hasFill && !hasStroke) {
                     commands.push({
                         type: 'brush', color: '#000000', size: strokeWidth * (scaleX + scaleY) / 2,
-                        opacity, points: rectPts, closed: true
+                        opacity, points: rectPts, closed: true,
+                        lineCap, lineJoin
                     });
                 }
             } else if (tag === 'circle') {
@@ -4651,13 +4685,15 @@ ${svgContent}
                 if (hasStroke) {
                     commands.push({
                         type: 'brush', color: stroke, size: strokeWidth * (scaleX + scaleY) / 2,
-                        opacity, points: circlePts, closed: true
+                        opacity, points: circlePts, closed: true,
+                        lineCap, lineJoin
                     });
                 }
                 if (!hasFill && !hasStroke) {
                     commands.push({
                         type: 'brush', color: '#000000', size: strokeWidth * (scaleX + scaleY) / 2,
-                        opacity, points: circlePts, closed: true
+                        opacity, points: circlePts, closed: true,
+                        lineCap, lineJoin
                     });
                 }
             } else if (tag === 'ellipse') {
@@ -4680,13 +4716,15 @@ ${svgContent}
                 if (hasStroke) {
                     commands.push({
                         type: 'brush', color: stroke, size: strokeWidth * (scaleX + scaleY) / 2,
-                        opacity, points: ellipsePts, closed: true
+                        opacity, points: ellipsePts, closed: true,
+                        lineCap, lineJoin
                     });
                 }
                 if (!hasFill && !hasStroke) {
                     commands.push({
                         type: 'brush', color: '#000000', size: strokeWidth * (scaleX + scaleY) / 2,
-                        opacity, points: ellipsePts, closed: true
+                        opacity, points: ellipsePts, closed: true,
+                        lineCap, lineJoin
                     });
                 }
             } else if (tag === 'image') {
@@ -4723,7 +4761,8 @@ ${svgContent}
                     color: stroke || '#000000',
                     size: strokeWidth * (scaleX + scaleY) / 2,
                     opacity,
-                    x1, y1, x2, y2
+                    x1, y1, x2, y2,
+                    lineCap, lineJoin
                 });
             } else if (tag === 'path') {
                 const d = el.getAttribute('d');
@@ -4751,7 +4790,8 @@ ${svgContent}
                                 size: strokeWidth * (scaleX + scaleY) / 2,
                                 opacity,
                                 points: [...points],
-                                closed: isClosedPath
+                                closed: isClosedPath,
+                                lineCap, lineJoin
                             });
                         }
                         if (!hasFill && !hasStroke) {
@@ -4761,7 +4801,8 @@ ${svgContent}
                                 size: strokeWidth * (scaleX + scaleY) / 2,
                                 opacity,
                                 points,
-                                closed: isClosedPath
+                                closed: isClosedPath,
+                                lineCap, lineJoin
                             });
                         }
                     }
@@ -4802,7 +4843,8 @@ ${svgContent}
                                 size: strokeWidth * (scaleX + scaleY) / 2,
                                 opacity,
                                 points: [...parsedPoints],
-                                closed: isPolygon
+                                closed: isPolygon,
+                                lineCap, lineJoin
                             });
                         }
                         if (!hasFill && !hasStroke) {
@@ -4812,7 +4854,8 @@ ${svgContent}
                                 size: strokeWidth * (scaleX + scaleY) / 2,
                                 opacity,
                                 points: parsedPoints,
-                                closed: isPolygon
+                                closed: isPolygon,
+                                lineCap, lineJoin
                             });
                         }
                     }
