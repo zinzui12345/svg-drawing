@@ -1656,7 +1656,7 @@ class DrawingApp {
         if (this.currentTool === 'brush') {
             if (this.currentStroke) {
                 const last = this.currentStroke.points[this.currentStroke.points.length - 1];
-                if (!last || this.dist(coords.x, coords.y, last.x, last.y) >= 3) {
+                if (!last || this.dist(coords.x, coords.y, last.x, last.y) >= 1) {
                     this.currentStroke.points.push({ x: coords.x, y: coords.y });
                 }
             }
@@ -3567,7 +3567,7 @@ class DrawingApp {
         if (simplified.length <= 2) {
             return simplified.map(p => ({ x: p.x, y: p.y }));
         }
-        const angleThreshold = 150;
+        const angleThreshold = 5;
         const isCorner = [];
         for (let i = 0; i < simplified.length; i++) {
             if (i === 0 || i === simplified.length - 1) {
