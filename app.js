@@ -25,6 +25,9 @@ class DrawingApp {
         this.brushOpacity = 1;
         this.brushLineCap = 'round';
         this.brushLineJoin = 'round';
+        this.brushShape = 'round';
+        this.shapePolygons = {};
+        this.currentStar = null;
         this.expandOffset = 2;
 
         this.penPoints = [];
@@ -94,6 +97,7 @@ class DrawingApp {
         this.fitCanvasToContainer();
         this.addLayer('Layer 1');
         this.setupEventListeners();
+        this.loadShapes();
         this.updateLayerPanel();
     }
 
@@ -767,8 +771,8 @@ class DrawingApp {
                 } else {
                     ctx.strokeStyle = this.currentStroke.color;
                     ctx.lineWidth = this.currentStroke.size;
-                    ctx.lineCap = 'round';
-                    ctx.lineJoin = 'round';
+                    ctx.lineCap = this.brushLineCap;
+                    ctx.lineJoin = this.brushLineJoin;
                     ctx.beginPath();
                     ctx.moveTo(pts[0].x, pts[0].y);
                     for (let i = 1; i < pts.length; i++) {
@@ -784,11 +788,30 @@ class DrawingApp {
                 }
                 ctx.globalAlpha = 1;
             }
+            if (this.brushShape === 'star' && this.currentStar) {
+                for (const fill of this.currentStar.fills) {
+                    this.redrawCommand(ctx, fill);
+                }
+            }
             const radius = this.brushSize / 2;
             ctx.strokeStyle = '#000000';
             ctx.lineWidth = 1;
             ctx.beginPath();
-            ctx.arc(this.mouseX, this.mouseY, radius, 0, Math.PI * 2);
+            if (this.brushShape === 'square') {
+                ctx.rect(this.mouseX - radius, this.mouseY - radius, this.brushSize, this.brushSize);
+            } else if (this.brushShape === 'star') {
+                const pts = this.shapePolygons.star;
+                if (pts) {
+                    const scale = this.brushSize / 60;
+                    ctx.moveTo(this.mouseX + pts[0].x * scale, this.mouseY + pts[0].y * scale);
+                    for (let i = 1; i < pts.length; i++) {
+                        ctx.lineTo(this.mouseX + pts[i].x * scale, this.mouseY + pts[i].y * scale);
+                    }
+                    ctx.closePath();
+                }
+            } else {
+                ctx.arc(this.mouseX, this.mouseY, radius, 0, Math.PI * 2);
+            }
             ctx.stroke();
             ctx.strokeStyle = '#808080';
             ctx.beginPath();
@@ -980,15 +1003,24 @@ class DrawingApp {
             this._constrainShape = e.ctrlKey || e.metaKey;
         } else if (this.currentTool === 'brush') {
             this.saveState();
-            this.currentStroke = {
-                type: this.currentTool,
-                color: this.brushColor,
-                size: this.brushSize,
-                opacity: this.brushOpacity,
-                points: [{ x: coords.x, y: coords.y }],
-                lineCap: this.brushLineCap,
-                lineJoin: this.brushLineJoin
-            };
+            if (this.brushShape === 'star') {
+                this.currentStar = {
+                    points: [{ x: coords.x, y: coords.y }],
+                    fills: []
+                };
+                const fill = this.makeStarFill(coords.x, coords.y, this.brushSize);
+                if (fill) this.currentStar.fills.push(fill);
+            } else {
+                this.currentStroke = {
+                    type: this.currentTool,
+                    color: this.brushColor,
+                    size: this.brushSize,
+                    opacity: this.brushOpacity,
+                    points: [{ x: coords.x, y: coords.y }],
+                    lineCap: this.brushLineCap,
+                    lineJoin: this.brushLineJoin
+                };
+            }
             this.viewportRender();
         }
     }
@@ -1654,7 +1686,14 @@ class DrawingApp {
         }
 
         if (this.currentTool === 'brush') {
-            if (this.currentStroke) {
+            if (this.brushShape === 'star' && this.currentStar) {
+                const last = this.currentStar.points[this.currentStar.points.length - 1];
+                if (this.dist(coords.x, coords.y, last.x, last.y) >= this.brushSize * 0.5) {
+                    this.currentStar.points.push({ x: coords.x, y: coords.y });
+                    const fill = this.makeStarFill(coords.x, coords.y, this.brushSize);
+                    if (fill) this.currentStar.fills.push(fill);
+                }
+            } else if (this.currentStroke) {
                 const last = this.currentStroke.points[this.currentStroke.points.length - 1];
                 if (!last || this.dist(coords.x, coords.y, last.x, last.y) >= 1) {
                     this.currentStroke.points.push({ x: coords.x, y: coords.y });
@@ -1742,12 +1781,26 @@ class DrawingApp {
             this.shapeStart = null;
         }
 
-        if (this.currentStroke && this.currentStroke.points.length > 0) {
+        if (this.brushShape === 'star' && this.currentStar) {
+            if (this.currentStar.fills.length > 0) {
+                activeLayer.vectorCommands.push(...this.currentStar.fills);
+            }
+            this.currentStar = null;
+        } else if (this.currentStroke && this.currentStroke.points.length > 0) {
             this.currentStroke.points = this.simplifyCollinearPoints(this.currentStroke.points);
             if (this.currentStroke.points.length > 2) {
                 this.currentStroke.points = this.fitBrushCurve(this.currentStroke.points);
             }
-            activeLayer.vectorCommands.push(this.currentStroke);
+            if (this.currentStroke.points.length === 1) {
+                const p = this.currentStroke.points[0];
+                activeLayer.vectorCommands.push(
+                    this.brushShape === 'star'
+                        ? this.makeStarFill(p.x, p.y, this.brushSize)
+                        : this.makeSinglePointFill(p.x, p.y, this.brushSize)
+                );
+            } else {
+                activeLayer.vectorCommands.push(this.currentStroke);
+            }
         }
 
         this.currentStroke = null;
@@ -1783,9 +1836,24 @@ class DrawingApp {
         }
         if (this.isDrawing) {
             const activeLayer = this.layers[this.activeLayerIndex];
-            if (this.currentStroke && this.currentStroke.points.length > 0) {
+            if (this.brushShape === 'star' && this.currentStar) {
+                if (this.currentStar.fills.length > 0) {
+                    this.saveState();
+                    activeLayer.vectorCommands.push(...this.currentStar.fills);
+                }
+                this.currentStar = null;
+            } else if (this.currentStroke && this.currentStroke.points.length > 0) {
                 this.saveState();
-                activeLayer.vectorCommands.push(this.currentStroke);
+                if (this.currentStroke.points.length === 1) {
+                    const p = this.currentStroke.points[0];
+                    activeLayer.vectorCommands.push(
+                        this.brushShape === 'star'
+                            ? this.makeStarFill(p.x, p.y, this.brushSize)
+                            : this.makeSinglePointFill(p.x, p.y, this.brushSize)
+                    );
+                } else {
+                    activeLayer.vectorCommands.push(this.currentStroke);
+                }
             }
             this.currentStroke = null;
             this.isDrawing = false;
@@ -1963,6 +2031,10 @@ class DrawingApp {
         if (expandGroup) {
             expandGroup.style.display = tool === 'fill' ? 'block' : 'none';
         }
+        const brushShapeSection = document.getElementById('brushShapeSection');
+        if (brushShapeSection) {
+            brushShapeSection.style.display = tool === 'brush' ? 'block' : 'none';
+        }
         this.viewportRender();
     }
 
@@ -1980,6 +2052,78 @@ class DrawingApp {
         this.syncColorPickerToSelection();
         this.syncFillTypeToSelection();
         this.viewportRender();
+    }
+
+    loadShapes() {
+        const starPoints = [
+            { x: 0, y: -50 }, { x: 11, y: -15 }, { x: 48, y: -15 },
+            { x: 18, y: 6 }, { x: 29, y: 40 }, { x: 0, y: 18 },
+            { x: -29, y: 40 }, { x: -18, y: 6 }, { x: -48, y: -15 },
+            { x: -11, y: -15 }
+        ];
+        this.shapePolygons = { round: null, square: null, star: starPoints };
+        this.renderShapeList();
+    }
+
+    renderShapeList() {
+        const shapeList = document.getElementById('shapeList');
+        if (!shapeList) return;
+        shapeList.innerHTML = '';
+        const names = ['round', 'square', 'star'];
+        names.forEach(name => {
+            const item = document.createElement('div');
+            item.className = 'shape-item' + (name === this.brushShape ? ' active' : '');
+            item.dataset.shape = name;
+            if (name === 'round') {
+                item.innerHTML = '<svg viewBox="-24 -24 48 48"><circle cx="0" cy="0" r="18" fill="currentColor"/></svg>';
+            } else if (name === 'square') {
+                item.innerHTML = '<svg viewBox="-24 -24 48 48"><rect x="-16" y="-16" width="32" height="32" fill="currentColor"/></svg>';
+            } else {
+                item.innerHTML = '<svg viewBox="-24 -24 48 48"><polygon points="0,-20 4,-6 18,-6 7,2 11,16 0,7 -11,16 -7,2 -18,-6 -4,-6" fill="currentColor"/></svg>';
+            }
+            item.title = name.charAt(0).toUpperCase() + name.slice(1);
+            item.addEventListener('click', () => this.selectBrushShape(name));
+            shapeList.appendChild(item);
+        });
+    }
+
+    selectBrushShape(name) {
+        this.brushShape = name;
+        document.querySelectorAll('.shape-item').forEach(el => {
+            el.classList.toggle('active', el.dataset.shape === name);
+        });
+        if (name === 'round') { this.brushLineCap = 'round'; this.brushLineJoin = 'round'; }
+        else if (name === 'square') { this.brushLineCap = 'square'; this.brushLineJoin = 'miter'; }
+    }
+
+    makeStarFill(x, y, size) {
+        const pts = this.shapePolygons.star;
+        if (!pts || pts.length < 3) return null;
+        const scale = size / 60;
+        const fillPts = pts.map(p => ({ x: x + p.x * scale, y: y + p.y * scale }));
+        fillPts.push({ ...fillPts[0] });
+        return { type: 'fill', color: this.brushColor, opacity: this.brushOpacity, points: fillPts };
+    }
+
+    makeSinglePointFill(x, y, size) {
+        const r = size / 2;
+        if (this.brushShape === 'square') {
+            return {
+                type: 'fill', color: this.brushColor, opacity: this.brushOpacity,
+                points: [
+                    { x: x - r, y: y - r }, { x: x + r, y: y - r },
+                    { x: x + r, y: y + r }, { x: x - r, y: y + r },
+                    { x: x - r, y: y - r }
+                ]
+            };
+        }
+        const segments = 24;
+        const pts = [];
+        for (let i = 0; i <= segments; i++) {
+            const a = (i / segments) * Math.PI * 2;
+            pts.push({ x: x + Math.cos(a) * r, y: y + Math.sin(a) * r });
+        }
+        return { type: 'fill', color: this.brushColor, opacity: this.brushOpacity, points: pts };
     }
 
     updateDeleteButton() {
@@ -2634,7 +2778,7 @@ class DrawingApp {
                         ctx.lineTo(curr.x, curr.y);
                     }
                 }
-                if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= cmd.size * 2) {
+                if (cmd.closed || (cmd.points.length > 2 && Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= cmd.size * 2)) {
                     const last = cmd.points[cmd.points.length - 1];
                     const first = cmd.points[0];
                     if (last.cp2x !== undefined && first.cp1x !== undefined) {
@@ -2773,7 +2917,7 @@ class DrawingApp {
         const pts = cmd.points;
         if (!pts || pts.length === 0) return null;
 
-        const closed = cmd.closed || (pts.length >= 2 &&
+        const closed = cmd.closed || (pts.length > 2 &&
             Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y) <= cmd.size * 2);
         const flat = this.sampleStroke(pts, closed);
         if (flat.length < 3) return null;
@@ -2823,6 +2967,7 @@ class DrawingApp {
         return inner;
     }
 
+
     async performFloodFill(x, y) {
         console.log('performFloodFill', x, y);
         if (x < 0 || x >= this.canvasWidth || y < 0 || y >= this.canvasHeight) return;
@@ -2837,7 +2982,7 @@ class DrawingApp {
         // Fast path: find a closed brush stroke containing the click, with no other objects inside it
         for (const cmd of commands) {
             if (cmd.type !== 'brush') continue;
-            const closed = cmd.closed || (cmd.points.length >= 2 && Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length-1].x, cmd.points[0].y - cmd.points[cmd.points.length-1].y) <= cmd.size * 2);
+            const closed = cmd.closed || (cmd.points.length > 2 && Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length-1].x, cmd.points[0].y - cmd.points[cmd.points.length-1].y) <= cmd.size * 2);
             const flat = this.sampleStroke(cmd.points, closed);
             if (flat.length < 3) continue;
             if (!closed || !this.pointInRing(x, y, flat)) continue;
@@ -2859,7 +3004,7 @@ class DrawingApp {
             if (hasInner) break;
             // Fast path: duplicate brush stroke as fill
             let fillPts;
-            if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length-1].x, cmd.points[0].y - cmd.points[cmd.points.length-1].y) <= cmd.size * 2) {
+            if (cmd.closed || (cmd.points.length > 2 && Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length-1].x, cmd.points[0].y - cmd.points[cmd.points.length-1].y) <= cmd.size * 2)) {
                 fillPts = cmd.points.map(p => ({ ...p }));
             } else {
                 fillPts = cmd.points.map(p => ({ ...p }));
@@ -2980,6 +3125,7 @@ class DrawingApp {
         this.viewportRender();
     } finally { this.viewportCanvas.style.cursor = prevCursor; } }
 
+
     findFillInsertIndex(commands, contours) {
         const outerPoints = contours.outer || contours;
         const boundaryHitCounts = new Map();
@@ -3083,7 +3229,7 @@ class DrawingApp {
             }
             return { regions: [ring], inverted: false };
         }
-        const closed = cmd.closed || (pts.length >= 2 && Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y) <= cmd.size * 2);
+        const closed = cmd.closed || (pts.length > 2 && Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y) <= cmd.size * 2);
         const flat = this.sampleStroke(pts, closed);
         if (closed && flat.length > 2 &&
             (flat[0].x !== flat[flat.length - 1].x || flat[0].y !== flat[flat.length - 1].y)) {
@@ -4010,7 +4156,7 @@ class DrawingApp {
                                     d += ` L ${curr.x.toFixed(2)} ${curr.y.toFixed(2)}`;
                                 }
                             }
-                            if (cmd.closed || Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= cmd.size * 2) {
+                            if (cmd.closed || (cmd.points.length > 2 && Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= cmd.size * 2)) {
                                 const last = cmd.points[cmd.points.length - 1];
                                 const first = cmd.points[0];
                                 if (last.cp2x !== undefined && first.cp1x !== undefined) {

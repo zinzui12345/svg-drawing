@@ -343,6 +343,42 @@ input.spinbox:focus {
     opacity: 0.5;
 }
 
+.shape-list {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+
+.shape-item {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-tertiary);
+    border: 2px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    padding: 6px;
+}
+
+.shape-item:hover {
+    background: var(--bg-hover);
+}
+
+.shape-item.active {
+    border-color: var(--accent);
+    background: var(--bg-hover);
+}
+
+.shape-item svg {
+    width: 100%;
+    height: 100%;
+    fill: var(--text-primary);
+}
+
 /* Gradient Editor */
 .fill-controls label {
     display: block;
