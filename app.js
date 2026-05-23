@@ -690,7 +690,7 @@ class DrawingApp {
             if (!layer.visible) continue;
 
             let alpha = layer.opacity;
-            if (this.currentTool === 'select' ? layer.selectable === false : (this.currentTool === 'fill' && i !== this.activeLayerIndex)) alpha *= 0.5;
+            if (this.currentTool === 'select' ? layer.selectable === false : (this.currentTool === 'fill' && layer.selectable === false)) alpha *= 0.5;
 
             for (const cmd of layer.vectorCommands || []) {
                 vpCtx.globalAlpha = alpha * (cmd.opacity || 1);
@@ -1869,8 +1869,14 @@ class DrawingApp {
                 const y2 = Math.max(this.selectStart.y, lastCoords.y);
                 if (x2 - x1 > 2 && y2 - y1 > 2) {
                     this.clearSelection();
-                    const activeLayer = this.layers[this.activeLayerIndex];
-                    const commands = activeLayer.vectorCommands || [];
+        const activeLayer = this.layers[this.activeLayerIndex];
+        const barrierCmds = [];
+        for (const layer of this.layers) {
+            if (layer.selectable !== false && layer.vectorCommands) {
+                barrierCmds.push(...layer.vectorCommands);
+            }
+        }
+        const commands = activeLayer.vectorCommands || [];
                     for (let i = 0; i < commands.length; i++) {
                         if (this.commandInRect(commands[i], x1, y1, x2, y2)) {
                             this.selectedIndices.push(i);
@@ -1983,7 +1989,7 @@ class DrawingApp {
             if (!layer.visible) continue;
 
             let alpha = layer.opacity;
-            if (this.currentTool === 'select' ? layer.selectable === false : (this.currentTool === 'fill' && i !== this.activeLayerIndex)) alpha *= 0.5;
+            if (this.currentTool === 'select' ? layer.selectable === false : (this.currentTool === 'fill' && layer.selectable === false)) alpha *= 0.5;
 
             for (const cmd of layer.vectorCommands || []) {
                 ctx.globalAlpha = alpha * (cmd.opacity !== undefined ? cmd.opacity : 1);
@@ -2978,9 +2984,15 @@ class DrawingApp {
 
         const activeLayer = this.layers[this.activeLayerIndex];
         const commands = activeLayer.vectorCommands || [];
+        const barrierCmds = [];
+        for (const layer of this.layers) {
+            if (layer.selectable !== false && layer.vectorCommands) {
+                barrierCmds.push(...layer.vectorCommands);
+            }
+        }
 
         // Fast path: find a closed brush stroke containing the click, with no other objects inside it
-        for (const cmd of commands) {
+        for (const cmd of barrierCmds) {
             if (cmd.type !== 'brush') continue;
             const closed = cmd.closed || (cmd.points.length > 2 && Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length-1].x, cmd.points[0].y - cmd.points[cmd.points.length-1].y) <= cmd.size * 2);
             const flat = this.sampleStroke(cmd.points, closed);
@@ -2988,7 +3000,7 @@ class DrawingApp {
             if (!closed || !this.pointInRing(x, y, flat)) continue;
             // Check no other non-fill object is inside this brush stroke
             let hasInner = false;
-            for (const other of commands) {
+            for (const other of barrierCmds) {
                 if (other === cmd || other.type === 'fill') continue;
                 const otherFlat = other.type === 'brush' ? this.sampleStroke(other.points, other.closed) : null;
                 if (otherFlat && otherFlat.length >= 2 && this.pointInRing(otherFlat[Math.floor(otherFlat.length / 2)].x, otherFlat[Math.floor(otherFlat.length / 2)].y, flat)) {
@@ -3021,8 +3033,8 @@ class DrawingApp {
 
         // Union all command obstacles
         let inkUnion = null;
-        for (let ci = 0; ci < commands.length; ci++) {
-            const cmd = commands[ci];
+        for (let ci = 0; ci < barrierCmds.length; ci++) {
+            const cmd = barrierCmds[ci];
             const polys = this.cmdToPolygons(cmd);
             if (!polys || !polys.regions || polys.regions.length === 0) continue;
             if (polys.regions.some(r => r.length < 3)) continue;
