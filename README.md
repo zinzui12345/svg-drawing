@@ -11,6 +11,7 @@ A lightweight, browser-based vector drawing application with layer support, SVG 
 - **Rectangle (R)** — Draw rectangles with stroke.
 - **Circle (C)** — Draw ellipses and circles.
 - **Fill (F)** — Flood fill tool that creates closed paths with fill color. Automatically expands boundaries to avoid gaps with stroked objects.
+- **Eraser (E)** — Erase parts of objects on selected layers with a freehand stroke. Uses polygon boolean subtraction (via PolyBool) to cut holes or trim shapes. Supports round lineCap and lineJoin for smooth results. Hidden when using Select tool with an active selection to avoid conflicts with path edit mode (E).
 
 ### Selection & Manipulation
 - **Select Tool (V)** — Click to select, drag for rectangular selection. Supports:
@@ -84,7 +85,7 @@ The sidebar panel is organized into sections:
 | **R**                     | Rectangle tool                |
 | **C**                     | Circle tool                   |
 | **F**                     | Fill tool                     |
-| **E**                     | Toggle path edit mode         |
+| **E**                     | Eraser tool (no selection) / Toggle path edit mode (selection exists) |
 | **Escape**                | Clear selection (Select tool) |
 | **Ctrl+Z**                | Undo                          |
 | **Ctrl+Y** / **Ctrl+Shift+Z** | Redo                      |
@@ -141,4 +142,5 @@ Works in all modern browsers that support:
 - Blend modes are exported as CSS `mix-blend-mode` on `<g>` elements. While fully functional in browsers, some desktop vector editors (Inkscape, Illustrator) may not render CSS blend modes.
 - The flood fill tool works on pixel data and creates vector path representations of filled regions.
 - Brush strokes are automatically simplified and fitted with bezier curves on completion, reducing point count while preserving shape.
-- Pen tool paths are also curve-fitted on finalization. Use Enter, double-click, or switch tools to finalize. Right-click removes the last point;Use Escape or right-click with a single point cancels the path.
+- Pen tool paths are also curve-fitted on finalization. Use Enter, double-click, or switch tools to finalize. Right-click removes the last point; use Escape or right-click with a single point cancels the path.
+- The Eraser tool operates on all selected layers (`selectable === true`). Erased regions are converted to fill commands with proper hole nesting via `groupRingsIntoRegions`, ensuring cuts inside fill objects produce correct holes rather than overlapping fills.

@@ -820,6 +820,53 @@ class DrawingApp {
             ctx.moveTo(this.mouseX, this.mouseY - 5);
             ctx.lineTo(this.mouseX, this.mouseY + 5);
             ctx.stroke();
+        } else if (this.currentTool === 'eraser') {
+            if (this.currentStroke && this.currentStroke.points.length > 0) {
+                const pts = this.currentStroke.points;
+                ctx.globalAlpha = 0.4;
+                if (pts.length < 2) {
+                    ctx.fillStyle = '#ff0000';
+                    ctx.beginPath();
+                    ctx.arc(pts[0].x, pts[0].y, this.currentStroke.size / 2, 0, Math.PI * 2);
+                    ctx.fill();
+                } else {
+                    ctx.strokeStyle = '#ff0000';
+                    ctx.lineWidth = this.currentStroke.size;
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    ctx.beginPath();
+                    ctx.moveTo(pts[0].x, pts[0].y);
+                    for (let i = 1; i < pts.length; i++) {
+                        const prev = pts[i - 1];
+                        const curr = pts[i];
+                        if (prev.cp2x !== undefined && curr.cp1x !== undefined) {
+                            ctx.bezierCurveTo(prev.cp2x, prev.cp2y, curr.cp1x, curr.cp1y, curr.x, curr.y);
+                        } else {
+                            ctx.lineTo(curr.x, curr.y);
+                        }
+                    }
+                    ctx.stroke();
+                }
+                ctx.globalAlpha = 1;
+            }
+            const radius = this.brushSize / 2;
+            ctx.strokeStyle = '#ff0000';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(this.mouseX, this.mouseY, radius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.fillStyle = 'rgba(255,0,0,0.15)';
+            ctx.beginPath();
+            ctx.arc(this.mouseX, this.mouseY, radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = '#ff0000';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(this.mouseX - radius * 0.7, this.mouseY - radius * 0.7);
+            ctx.lineTo(this.mouseX + radius * 0.7, this.mouseY + radius * 0.7);
+            ctx.moveTo(this.mouseX + radius * 0.7, this.mouseY - radius * 0.7);
+            ctx.lineTo(this.mouseX - radius * 0.7, this.mouseY + radius * 0.7);
+            ctx.stroke();
         } else if (this.currentTool === 'fill') {
             ctx.strokeStyle = this.brushColor;
             ctx.lineWidth = 2;
@@ -1021,6 +1068,18 @@ class DrawingApp {
                     lineJoin: this.brushLineJoin
                 };
             }
+            this.viewportRender();
+        } else if (this.currentTool === 'eraser') {
+            this.saveState();
+            this.currentStroke = {
+                type: 'eraser',
+                color: '#ff0000',
+                size: this.brushSize,
+                opacity: 0.5,
+                points: [{ x: coords.x, y: coords.y }],
+                lineCap: 'round',
+                lineJoin: 'round'
+            };
             this.viewportRender();
         }
     }
@@ -1702,6 +1761,16 @@ class DrawingApp {
             this.lastX = coords.x;
             this.lastY = coords.y;
             this.viewportRender();
+        } else if (this.currentTool === 'eraser') {
+            if (this.currentStroke) {
+                const last = this.currentStroke.points[this.currentStroke.points.length - 1];
+                if (!last || this.dist(coords.x, coords.y, last.x, last.y) >= this.brushSize * 0.3) {
+                    this.currentStroke.points.push({ x: coords.x, y: coords.y });
+                }
+            }
+            this.lastX = coords.x;
+            this.lastY = coords.y;
+            this.viewportRender();
         } else if (this.currentTool === 'line' || this.currentTool === 'rect' || this.currentTool === 'circle') {
             this.viewportRender();
         }
@@ -1786,7 +1855,7 @@ class DrawingApp {
                 activeLayer.vectorCommands.push(...this.currentStar.fills);
             }
             this.currentStar = null;
-        } else if (this.currentStroke && this.currentStroke.points.length > 0) {
+        } else if (this.currentStroke && this.currentStroke.type !== 'eraser' && this.currentStroke.points.length > 0) {
             this.currentStroke.points = this.simplifyCollinearPoints(this.currentStroke.points);
             if (this.currentStroke.points.length > 2) {
                 this.currentStroke.points = this.fitBrushCurve(this.currentStroke.points);
@@ -1801,6 +1870,11 @@ class DrawingApp {
             } else {
                 activeLayer.vectorCommands.push(this.currentStroke);
             }
+        }
+
+        if (this.currentStroke && this.currentStroke.type === 'eraser' && this.currentStroke.points.length > 0) {
+            this.currentStroke.points = this.simplifyCollinearPoints(this.currentStroke.points);
+            this.performErase(this.currentStroke);
         }
 
         this.currentStroke = null;
@@ -1842,7 +1916,7 @@ class DrawingApp {
                     activeLayer.vectorCommands.push(...this.currentStar.fills);
                 }
                 this.currentStar = null;
-            } else if (this.currentStroke && this.currentStroke.points.length > 0) {
+            } else if (this.currentStroke && this.currentStroke.type !== 'eraser' && this.currentStroke.points.length > 0) {
                 this.saveState();
                 if (this.currentStroke.points.length === 1) {
                     const p = this.currentStroke.points[0];
@@ -1854,6 +1928,11 @@ class DrawingApp {
                 } else {
                     activeLayer.vectorCommands.push(this.currentStroke);
                 }
+            }
+            if (this.currentStroke && this.currentStroke.type === 'eraser' && this.currentStroke.points.length > 0) {
+                this.saveState();
+                this.currentStroke.points = this.simplifyCollinearPoints(this.currentStroke.points);
+                this.performErase(this.currentStroke);
             }
             this.currentStroke = null;
             this.isDrawing = false;
@@ -2030,7 +2109,7 @@ class DrawingApp {
         }
         const sizeGroup = document.getElementById('sizeToolGroup');
         if (sizeGroup) {
-            const showSize = ['brush', 'line', 'rect', 'circle', 'pen'].includes(tool);
+            const showSize = ['brush', 'line', 'rect', 'circle', 'pen', 'eraser'].includes(tool);
             sizeGroup.style.display = showSize ? 'block' : 'none';
         }
         const expandGroup = document.getElementById('expandToolGroup');
@@ -2132,6 +2211,70 @@ class DrawingApp {
         return { type: 'fill', color: this.brushColor, opacity: this.brushOpacity, points: pts };
     }
 
+    performErase(eraserCmd) {
+        const eraserPolys = this.brushToPolygon(eraserCmd);
+        if (!eraserPolys || !eraserPolys.regions || eraserPolys.regions.length === 0) return;
+
+        for (const layer of this.layers) {
+            if (layer.selectable === false || !layer.vectorCommands) continue;
+            const cmds = layer.vectorCommands;
+            const newCmds = [];
+
+            for (const cmd of cmds) {
+                const cmdPolys = this.cmdToPolygons(cmd);
+                if (!cmdPolys || !cmdPolys.regions || cmdPolys.regions.length === 0) {
+                    newCmds.push(cmd);
+                    continue;
+                }
+
+                try {
+                    const diff = this._pbDifference(cmdPolys, eraserPolys);
+                    if (!diff || !diff.regions || diff.regions.length === 0 || diff.inverted) {
+                        continue;
+                    }
+
+                    const validRings = diff.regions.filter(r => r.length >= 3 && Math.abs(this.signedArea(r)) > 0.5);
+                    if (validRings.length === 0) continue;
+
+                    const origArea = cmdPolys.regions.reduce((s, r) => s + Math.abs(this.signedArea(r)), 0);
+                    const diffArea = validRings.reduce((s, r) => s + Math.abs(this.signedArea(r)), 0);
+
+                    if (Math.abs(origArea - diffArea) < 0.5) {
+                        newCmds.push(cmd);
+                    } else {
+                        const grouped = this.groupRingsIntoRegions(validRings);
+                        for (const group of grouped) {
+                            const fillCmd = {
+                                type: 'fill',
+                                color: cmd.color || '#000',
+                                opacity: cmd.opacity !== undefined ? cmd.opacity : 1,
+                                points: { outer: group.outer, holes: group.holes || [] }
+                            };
+                            if (cmd.fillType && cmd.gradient) {
+                                fillCmd.fillType = cmd.fillType;
+                                fillCmd.gradient = JSON.parse(JSON.stringify(cmd.gradient));
+                            }
+                            newCmds.push(fillCmd);
+                        }
+                    }
+                } catch (e) {
+                    console.warn('erase difference failed:', e);
+                    newCmds.push(cmd);
+                }
+            }
+
+            layer.vectorCommands = newCmds;
+        }
+    }
+
+    canvasBbox() {
+        return [
+            { x: 0, y: 0 }, { x: this.canvasWidth, y: 0 },
+            { x: this.canvasWidth, y: this.canvasHeight }, { x: 0, y: this.canvasHeight },
+            { x: 0, y: 0 }
+        ];
+    }
+
     updateDeleteButton() {
         const deleteBtn = document.getElementById('deleteSelectedBtn');
         const moveSelect = document.getElementById('moveToLayerSelect');
@@ -2151,6 +2294,13 @@ class DrawingApp {
         if (moveSelect) moveSelect.style.display = visible ? 'inline-block' : 'none';
         if (centerHBtn) centerHBtn.style.display = visible ? 'flex' : 'none';
         if (centerVBtn) centerVBtn.style.display = visible ? 'flex' : 'none';
+
+        const eraserBtn = document.getElementById('toolEraser');
+        if (eraserBtn) {
+            const hideEraser = this.currentTool === 'select' && this.selectedCommands.length > 0;
+            eraserBtn.style.display = hideEraser ? 'none' : '';
+            eraserBtn.disabled = hideEraser;
+        }
 
         if (visible && moveSelect) {
             moveSelect.innerHTML = '<option value="">Move to...</option>';
@@ -3241,7 +3391,7 @@ class DrawingApp {
             }
             return { regions: [ring], inverted: false };
         }
-        const closed = cmd.closed || (pts.length > 2 && Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y) <= cmd.size * 2);
+        const closed = cmd.closed || (cmd.type !== 'eraser' && pts.length > 2 && Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y) <= cmd.size * 2);
         const flat = this.sampleStroke(pts, closed);
         if (closed && flat.length > 2 &&
             (flat[0].x !== flat[flat.length - 1].x || flat[0].y !== flat[flat.length - 1].y)) {
@@ -3249,7 +3399,8 @@ class DrawingApp {
             console.log('brushToPolygon: closed, flat now', flat.length, 'points');
         }
         const hw = cmd.size / 2;
-        if (!closed) {
+        const useRound = cmd.lineJoin === 'round' || cmd.lineCap === 'round';
+        if (!closed && !useRound) {
             const outline = this.strokeToOutline(flat, hw, false);
             if (outline && outline.length >= 4) {
                 console.log('brushToPolygon: using strokeToOutline');
@@ -3292,32 +3443,37 @@ class DrawingApp {
     brushToPolygonObstacle(flat, hw) {
         if (flat.length < 2) return null;
         let merged = null;
-        let quadCount = 0;
         for (let i = 0; i < flat.length - 1; i++) {
             const p = flat[i], next = flat[i + 1];
             const dx = next.x - p.x, dy = next.y - p.y;
             const len = Math.hypot(dx, dy);
             if (len < 0.001) continue;
-            quadCount++;
-            const ux = dx / len, uy = dy / len;
-            const nx = -uy * hw, ny = ux * hw;
-            let e0 = hw * 0.5, e1 = hw * 0.5;
-            if (i === 0) e0 = hw * 3;
-            if (i === flat.length - 2) e1 = hw * 3;
-            const ex0 = ux * e0, ey0 = uy * e0;
-            const ex1 = ux * e1, ey1 = uy * e1;
-            const quad = [
-                { x: p.x - nx - ex0, y: p.y - ny - ey0 },
-                { x: p.x + nx - ex0, y: p.y + ny - ey0 },
-                { x: next.x + nx + ex1, y: next.y + ny + ey1 },
-                { x: next.x - nx + ex1, y: next.y - ny + ey1 },
-                { x: p.x - nx - ex0, y: p.y - ny - ey0 }
-            ];
-            const quadPoly = { regions: [quad], inverted: false };
-            if (merged === null) merged = quadPoly;
-            else { try { merged = this._pbUnion(merged, quadPoly); } catch (e) { return null; } }
+            const nx = -dy / len * hw, ny = dx / len * hw;
+            const quad = { regions: [[
+                { x: p.x - nx, y: p.y - ny },
+                { x: p.x + nx, y: p.y + ny },
+                { x: next.x + nx, y: next.y + ny },
+                { x: next.x - nx, y: next.y - ny }
+            ]], inverted: false };
+            if (!merged) { merged = quad; }
+            else { merged = this._pbUnion(merged, quad); }
+
+            // Round join at vertex p (circle cap)
+            const ring = [];
+            for (let j = 0; j <= 8; j++) {
+                const a = (j / 8) * Math.PI * 2;
+                ring.push({ x: p.x + hw * Math.cos(a), y: p.y + hw * Math.sin(a) });
+            }
+            merged = this._pbUnion(merged, { regions: [ring], inverted: false });
         }
-        console.log('brushToPolygonObstacle: quads=' + quadCount + ' result_regions=' + (merged ? merged.regions.length : 'null'));
+        // Round cap at last vertex
+        const lastP = flat[flat.length - 1];
+        const lastRing = [];
+        for (let j = 0; j <= 8; j++) {
+            const a = (j / 8) * Math.PI * 2;
+            lastRing.push({ x: lastP.x + hw * Math.cos(a), y: lastP.y + hw * Math.sin(a) });
+        }
+        merged = this._pbUnion(merged, { regions: [lastRing], inverted: false });
         return merged;
     }
 
@@ -5872,9 +6028,12 @@ ${svgContent}
 
         switch (e.key.toLowerCase()) {
             case 'e':
-                if (this.selectedCommands.length > 0) {
+                if (this.pathEditMode || this.selectedCommands.length > 0) {
                     e.preventDefault();
                     this.togglePathEdit();
+                } else if (!this.pathEditMode) {
+                    e.preventDefault();
+                    this.setTool('eraser');
                 }
                 break;
             case 'b':
