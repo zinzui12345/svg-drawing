@@ -3516,13 +3516,39 @@ class DrawingApp {
         const pts = cmd.points;
         if (!pts) return null;
         const regions = [];
+        const sampleRing = (ring) => {
+            if (!ring || ring.length < 3) return ring;
+            let hasCurves = false;
+            for (let i = 0; i < ring.length; i++) {
+                const j = (i + 1) % ring.length;
+                if (ring[i].cp2x !== undefined && ring[j].cp1x !== undefined) { hasCurves = true; break; }
+            }
+            if (!hasCurves) return [...ring];
+            const result = [];
+            for (let i = 0; i < ring.length; i++) {
+                const curr = ring[i];
+                const next = ring[(i + 1) % ring.length];
+                result.push({ x: curr.x, y: curr.y });
+                if (curr.cp2x !== undefined && next.cp1x !== undefined) {
+                    for (let s = 1; s < 8; s++) {
+                        const t = s / 8;
+                        const mt = 1 - t;
+                        result.push({
+                            x: mt*mt*mt*curr.x + 3*mt*mt*t*(curr.cp2x || curr.x) + 3*mt*t*t*(next.cp1x || next.x) + t*t*t*next.x,
+                            y: mt*mt*mt*curr.y + 3*mt*mt*t*(curr.cp2y || curr.y) + 3*mt*t*t*(next.cp1y || next.y) + t*t*t*next.y
+                        });
+                    }
+                }
+            }
+            return result;
+        };
         if (Array.isArray(pts)) {
-            if (pts.length >= 3) regions.push([...pts]);
+            if (pts.length >= 3) regions.push(sampleRing(pts));
         } else {
-            if (pts.outer && pts.outer.length >= 3) regions.push([...pts.outer]);
+            if (pts.outer && pts.outer.length >= 3) regions.push(sampleRing(pts.outer));
             if (pts.holes) {
                 for (const hole of pts.holes) {
-                    if (hole.length >= 3) regions.push([...hole]);
+                    if (hole.length >= 3) regions.push(sampleRing(hole));
                 }
             }
         }
