@@ -2284,6 +2284,8 @@ class DrawingApp {
         const moveBackBtn = document.getElementById('moveBackBtn');
         const moveForwardBtn = document.getElementById('moveForwardBtn');
         const duplicateBtn = document.getElementById('duplicateBtn');
+        const eraserBtn = document.getElementById('toolEraser');
+        const eraserControls = document.getElementById('eraserControls');
         const visible = this.selectedCommands.length > 0;
 
         if (deleteBtn) deleteBtn.style.display = visible ? 'flex' : 'none';
@@ -2294,9 +2296,6 @@ class DrawingApp {
         if (moveSelect) moveSelect.style.display = visible ? 'inline-block' : 'none';
         if (centerHBtn) centerHBtn.style.display = visible ? 'flex' : 'none';
         if (centerVBtn) centerVBtn.style.display = visible ? 'flex' : 'none';
-
-        const eraserBtn = document.getElementById('toolEraser');
-        const eraserControls = document.getElementById('eraserControls');
         if (eraserBtn) {
             const hideEraser = this.currentTool === 'select' && this.selectedCommands.length > 0;
             eraserControls.style.display = hideEraser ? 'none' : '';
@@ -3478,6 +3477,7 @@ class DrawingApp {
         return merged;
     }
 
+    // FIXME : perlu testing untuk path dengan sudut dan lengkungan karena hasilnya tidak akurat
     strokeToOutline(points, halfWidth, closed) {
         const n = points.length;
         if (n < 2) return null;
@@ -3530,8 +3530,8 @@ class DrawingApp {
                 const next = ring[(i + 1) % ring.length];
                 result.push({ x: curr.x, y: curr.y });
                 if (curr.cp2x !== undefined && next.cp1x !== undefined) {
-                    for (let s = 1; s < 8; s++) {
-                        const t = s / 8;
+                    for (let s = 1; s < 32; s++) {
+                        const t = s / 32;
                         const mt = 1 - t;
                         result.push({
                             x: mt*mt*mt*curr.x + 3*mt*mt*t*(curr.cp2x || curr.x) + 3*mt*t*t*(next.cp1x || next.x) + t*t*t*next.x,
