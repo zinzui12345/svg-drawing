@@ -2296,9 +2296,10 @@ class DrawingApp {
         if (centerVBtn) centerVBtn.style.display = visible ? 'flex' : 'none';
 
         const eraserBtn = document.getElementById('toolEraser');
+        const eraserControls = document.getElementById('eraserControls');
         if (eraserBtn) {
             const hideEraser = this.currentTool === 'select' && this.selectedCommands.length > 0;
-            eraserBtn.style.display = hideEraser ? 'none' : '';
+            eraserControls.style.display = hideEraser ? 'none' : '';
             eraserBtn.disabled = hideEraser;
         }
 
