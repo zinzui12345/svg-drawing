@@ -2220,6 +2220,226 @@ class DrawingApp {
         return { type: 'fill', color: this.brushColor, opacity: this.brushOpacity, points: pts };
     }
 
+    _segmentIntersect(a, b, c, d) {
+        const denom = (b.x - a.x) * (d.y - c.y) - (b.y - a.y) * (d.x - c.x);
+        if (Math.abs(denom) < 1e-10) return null;
+        const t = ((c.x - a.x) * (d.y - c.y) - (c.y - a.y) * (d.x - c.x)) / denom;
+        const u = ((c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x)) / denom;
+        if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+            return { x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y) };
+        }
+        return null;
+    }
+
+    _findSegmentEraserIntersection(p1, p2, regions) {
+        for (const region of regions) {
+            for (let j = 0, k = region.length - 1; j < region.length; k = j++) {
+                const int = this._segmentIntersect(p1, p2, region[k], region[j]);
+                if (int) return int;
+            }
+        }
+        return null;
+    }
+
+    _splitBezierAt(p1, p2, t) {
+        const ax = p1.x, ay = p1.y;
+        const bx = p1.cp2x !== undefined ? p1.cp2x : p1.x;
+        const by = p1.cp2y !== undefined ? p1.cp2y : p1.y;
+        const cx = p2.cp1x !== undefined ? p2.cp1x : p2.x;
+        const cy = p2.cp1y !== undefined ? p2.cp1y : p2.y;
+        const dx = p2.x, dy = p2.y;
+        const mt = 1 - t;
+        const abx = mt * ax + t * bx, aby = mt * ay + t * by;
+        const bcx = mt * bx + t * cx, bcy = mt * by + t * cy;
+        const cdx = mt * cx + t * dx, cdy = mt * cy + t * dy;
+        const abcx = mt * abx + t * bcx, abcy = mt * aby + t * bcy;
+        const bcdx = mt * bcx + t * cdx, bcdy = mt * bcy + t * cdy;
+        const pt = { x: mt * abcx + t * bcdx, y: mt * abcy + t * bcdy };
+        return {
+            left: { cp1x: abx, cp1y: aby, cp2x: abcx, cp2y: abcy },
+            pt,
+            right: { cp1x: bcdx, cp1y: bcdy, cp2x: cdx, cp2y: cdy }
+        };
+    }
+
+    _cutStrokeByEraser(cmd, eraserRegions) {
+        const pts = cmd.points;
+        if (!pts || pts.length < 2) return null;
+
+        const isCurved = pts.some(p => p.cp1x !== undefined || p.cp2x !== undefined);
+
+        if (!isCurved) {
+            const cutPoints = [{ x: pts[0].x, y: pts[0].y }];
+            for (let i = 0; i < pts.length - 1; i++) {
+                const p1 = pts[i], p2 = pts[i + 1];
+                const intersections = [];
+                for (const region of eraserRegions) {
+                    for (let j = 0, k = region.length - 1; j < region.length; k = j++) {
+                        const int = this._segmentIntersect(p1, p2, region[k], region[j]);
+                        if (int) {
+                            const t = Math.hypot(int.x - p1.x, int.y - p1.y) / Math.hypot(p2.x - p1.x, p2.y - p1.y);
+                            if (t > 0.001 && t < 0.999) {
+                                intersections.push({ x: int.x, y: int.y, t });
+                            }
+                        }
+                    }
+                }
+                intersections.sort((a, b) => a.t - b.t);
+                for (const int of intersections) cutPoints.push({ x: int.x, y: int.y });
+                cutPoints.push({ x: p2.x, y: p2.y });
+            }
+            const result = [];
+            let currentGroup = [];
+            for (let i = 0; i < cutPoints.length - 1; i++) {
+                const p1 = cutPoints[i], p2 = cutPoints[i + 1];
+                const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+                const midInside = eraserRegions.some(r => this.isPointInPolygon(mx, my, r));
+                if (!midInside) {
+                    if (currentGroup.length === 0) currentGroup.push({ ...p1 });
+                    currentGroup.push({ ...p2 });
+                } else {
+                    if (currentGroup.length >= 2) {
+                        result.push({ ...cmd, points: currentGroup });
+                    }
+                    currentGroup = [];
+                }
+            }
+            if (currentGroup.length >= 2) {
+                result.push({ ...cmd, points: currentGroup });
+            }
+            return result.length > 0 ? result : null;
+        }
+
+        const segments = [];
+        for (let i = 0; i < pts.length - 1; i++) {
+            const p1 = pts[i], p2 = pts[i + 1];
+            const samples = [];
+            const steps = 32;
+            for (let s = 0; s <= steps; s++) {
+                const t = s / steps;
+                const mt = 1 - t;
+                let x = mt * p1.x + t * p2.x;
+                let y = mt * p1.y + t * p2.y;
+                if (p1.cp2x !== undefined || p2.cp1x !== undefined) {
+                    const bx = p1.cp2x !== undefined ? p1.cp2x : p1.x;
+                    const by = p1.cp2y !== undefined ? p1.cp2y : p1.y;
+                    const cx = p2.cp1x !== undefined ? p2.cp1x : p2.x;
+                    const cy = p2.cp1y !== undefined ? p2.cp1y : p2.y;
+                    x = mt * mt * mt * p1.x + 3 * mt * mt * t * bx + 3 * mt * t * t * cx + t * t * t * p2.x;
+                    y = mt * mt * mt * p1.y + 3 * mt * mt * t * by + 3 * mt * t * t * cy + t * t * t * p2.y;
+                }
+                const inside = eraserRegions.some(r => this.isPointInPolygon(x, y, r));
+                samples.push({ t, inside });
+            }
+            segments.push({ p1, p2, samples });
+        }
+
+        const result = [];
+        let currentGroup = [];
+        for (let si = 0; si < segments.length; si++) {
+            const seg = segments[si];
+            const firstSample = seg.samples[0];
+            const lastSample = seg.samples[seg.samples.length - 1];
+
+            const transitions = [];
+            const divs = seg.samples.length - 1;
+            for (let s = 1; s < seg.samples.length; s++) {
+                const prev = seg.samples[s - 1], curr = seg.samples[s];
+                if (prev.inside !== curr.inside) {
+                    const tMid = (s - 0.5) / divs;
+                    transitions.push({ t: tMid });
+                }
+            }
+
+            if (!firstSample.inside && !lastSample.inside && transitions.length === 0) {
+                if (currentGroup.length === 0) currentGroup.push({ ...seg.p1 });
+                currentGroup.push({ ...seg.p2 });
+            } else if (firstSample.inside && lastSample.inside && transitions.length === 0) {
+                if (currentGroup.length >= 2) {
+                    result.push({ ...cmd, points: currentGroup });
+                }
+                currentGroup = [];
+            } else {
+                const splitTs = transitions.map(t => t.t).filter(t => t > 0.001 && t < 0.999);
+                if (splitTs.length === 0) {
+                    if (!firstSample.inside) {
+                        if (currentGroup.length === 0) currentGroup.push({ ...seg.p1 });
+                        currentGroup.push({ ...seg.p2 });
+                    } else {
+                        if (currentGroup.length >= 2) {
+                            result.push({ ...cmd, points: currentGroup });
+                        }
+                        currentGroup = [];
+                    }
+                } else {
+                    let curP1 = { ...seg.p1 };
+                    let lastSplit = null;
+                    let running = 0;
+                    for (const st of splitTs) {
+                        const adj = (st - running) / (1 - running);
+                        running = st;
+                        lastSplit = this._splitBezierAt(curP1, seg.p2, adj);
+                        if (currentGroup.length > 0) {
+                            currentGroup[currentGroup.length - 1].cp2x = lastSplit.left.cp1x;
+                            currentGroup[currentGroup.length - 1].cp2y = lastSplit.left.cp1y;
+                        }
+                        const midX = (curP1.x + lastSplit.pt.x) / 2, midY = (curP1.y + lastSplit.pt.y) / 2;
+                        const midInside = eraserRegions.some(r => this.isPointInPolygon(midX, midY, r));
+                        const splitPt = {
+                            x: lastSplit.pt.x, y: lastSplit.pt.y,
+                            cp1x: lastSplit.left.cp2x, cp1y: lastSplit.left.cp2y,
+                            cp2x: lastSplit.right.cp1x, cp2y: lastSplit.right.cp1y
+                        };
+                        if (!midInside) {
+                            if (currentGroup.length === 0) {
+                                const startPt = { ...curP1 };
+                                startPt.cp2x = lastSplit.left.cp1x;
+                                startPt.cp2y = lastSplit.left.cp1y;
+                                currentGroup.push(startPt);
+                            }
+                            currentGroup.push(splitPt);
+                        } else {
+                            if (currentGroup.length >= 2) {
+                                result.push({ ...cmd, points: currentGroup });
+                            }
+                            currentGroup = [];
+                        }
+                        curP1 = splitPt;
+                    }
+                    const lastMidX = (curP1.x + seg.p2.x) / 2, lastMidY = (curP1.y + seg.p2.y) / 2;
+                    const lastMidInside = eraserRegions.some(r => this.isPointInPolygon(lastMidX, lastMidY, r));
+                    if (!lastMidInside) {
+                        if (currentGroup.length === 0) {
+                            const startPt = { ...curP1 };
+                            if (lastSplit) {
+                                startPt.cp2x = lastSplit.right.cp1x;
+                                startPt.cp2y = lastSplit.right.cp1y;
+                            }
+                            currentGroup.push(startPt);
+                        }
+                        const endPt = { ...seg.p2 };
+                        if (lastSplit) {
+                            endPt.cp1x = lastSplit.right.cp2x;
+                            endPt.cp1y = lastSplit.right.cp2y;
+                        }
+                        currentGroup.push(endPt);
+                    } else {
+                        if (currentGroup.length >= 2) {
+                            result.push({ ...cmd, points: currentGroup });
+                        }
+                        currentGroup = [];
+                    }
+                }
+            }
+        }
+
+        if (currentGroup.length >= 2) {
+            result.push({ ...cmd, points: currentGroup });
+        }
+
+        return result.length > 0 ? result : null;
+    }
+
     performErase(eraserCmd) {
         const eraserPolys = this.brushToPolygon(eraserCmd);
         if (!eraserPolys || !eraserPolys.regions || eraserPolys.regions.length === 0) return;
@@ -2230,6 +2450,14 @@ class DrawingApp {
             const newCmds = [];
 
             for (const cmd of cmds) {
+                if (cmd.type === 'brush' && cmd.lineCap && cmd.lineJoin && cmd.size) {
+                    const cut = this._cutStrokeByEraser(cmd, eraserPolys.regions);
+                    if (cut) {
+                        newCmds.push(...cut);
+                    }
+                    continue;
+                }
+
                 const cmdPolys = this.cmdToPolygons(cmd);
                 if (!cmdPolys || !cmdPolys.regions || cmdPolys.regions.length === 0) {
                     newCmds.push(cmd);
