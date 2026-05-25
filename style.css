@@ -343,6 +343,25 @@ input.spinbox:focus {
     opacity: 0.5;
 }
 
+.layer-folder-toggle {
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 10px;
+    color: var(--text-primary);
+    flex-shrink: 0;
+}
+
+.layer-folder {
+    background: var(--bg-tertiary);
+    font-weight: 600;
+}
+
 .shape-list {
     display: flex;
     gap: 6px;

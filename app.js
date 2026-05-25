@@ -450,6 +450,15 @@ class DrawingApp {
         document.getElementById('moveDownLayerBtn').addEventListener('click', () => this.moveLayerDown());
         document.getElementById('mergeDownBtn').addEventListener('click', () => this.mergeDown());
         document.getElementById('renameLayerBtn').addEventListener('click', () => this.renameActiveLayer());
+        document.getElementById('addFolderBtn').addEventListener('click', () => { this.addFolder(); this.saveState(); });
+        document.getElementById('deleteFolderBtn').addEventListener('click', () => { this.deleteFolder(); this.saveState(); });
+        document.getElementById('moveToFolderBtn').addEventListener('click', () => {
+            const folders = this.layers.filter(l => l.type === 'folder');
+            if (folders.length === 0) { alert('No folders'); return; }
+            const folderId = prompt('Enter folder ID to move selected to:');
+            if (folderId) this.moveSelectedToFolder(parseInt(folderId));
+        });
+        document.getElementById('moveOutOfFolderBtn').addEventListener('click', () => { this.moveSelectedOutOfFolder(); this.saveState(); });
 
         document.getElementById('layerOpacity').addEventListener('input', (e) => {
             const opacity = parseInt(e.target.value) / 100;
@@ -687,7 +696,7 @@ class DrawingApp {
 
         for (let i = this.layers.length - 1; i >= 0; i--) {
             const layer = this.layers[i];
-            if (!layer.visible) continue;
+            if (!layer.visible || layer.type === 'folder') continue;
 
             let alpha = layer.opacity;
             if (this.currentTool === 'select' ? layer.selectable === false : (this.currentTool === 'fill' && layer.selectable === false)) alpha *= 0.5;
@@ -1105,12 +1114,7 @@ class DrawingApp {
         const activeLayer = this.layers[this.activeLayerIndex];
         activeLayer.vectorCommands = activeLayer.vectorCommands || [];
 
-        let processedPoints = this.penPoints;
-        if (processedPoints.length > 2) {
-            processedPoints = this.fitBrushCurve(processedPoints);
-        } else {
-            processedPoints = processedPoints.map(p => ({ x: p.x, y: p.y }));
-        }
+        let processedPoints = this.penPoints.map(p => ({ x: p.x, y: p.y }));
 
         activeLayer.vectorCommands.push({
             type: 'brush',
@@ -2065,7 +2069,7 @@ class DrawingApp {
 
         for (let i = this.layers.length - 1; i >= 0; i--) {
             const layer = this.layers[i];
-            if (!layer.visible) continue;
+            if (!layer.visible || layer.type === 'folder') continue;
 
             let alpha = layer.opacity;
             if (this.currentTool === 'select' ? layer.selectable === false : (this.currentTool === 'fill' && layer.selectable === false)) alpha *= 0.5;
@@ -3956,12 +3960,14 @@ class DrawingApp {
         return result;
     }
 
-    addLayer(name) {
+    addLayer(name, parentId) {
         this.clearSelection();
         this.layerCounter++;
 
         const layer = {
             id: this.layerCounter,
+            type: 'layer',
+            parentId: parentId || null,
             name: name || `Layer ${this.layerCounter}`,
             opacity: 1,
             blendMode: 'source-over',
@@ -3977,6 +3983,82 @@ class DrawingApp {
         this.layers[this.activeLayerIndex].selectable = true;
         this.viewportRender();
         this.updateLayerPanel();
+        return layer.id;
+    }
+
+    addFolder(name) {
+        this.clearSelection();
+        this.layerCounter++;
+        const folder = {
+            id: this.layerCounter,
+            type: 'folder',
+            parentId: null,
+            name: name || `Folder ${this.layerCounter}`,
+            visible: true,
+            selectable: true,
+            expanded: false
+        };
+        this.layers.forEach(l => l.selectable = false);
+        const insertAt = Math.min(this.activeLayerIndex, this.layers.length);
+        this.layers.splice(insertAt, 0, folder);
+        this.activeLayerIndex = insertAt;
+        this.layers[this.activeLayerIndex].selectable = true;
+        this.viewportRender();
+        this.updateLayerPanel();
+        return folder.id;
+    }
+
+    deleteFolder() {
+        this.showPathEditControls(false);
+        this.saveState();
+        this.clearSelection();
+        const folder = this.layers[this.activeLayerIndex];
+        if (!folder || folder.type !== 'folder') return;
+        const folderId = folder.id;
+        const idx = this.activeLayerIndex;
+        this.layers.splice(idx, 1);
+        for (let i = this.layers.length - 1; i >= 0; i--) {
+            if (this.layers[i].parentId === folderId) {
+                this.layers.splice(i, 1);
+            }
+        }
+        if (this.activeLayerIndex >= this.layers.length) {
+            this.activeLayerIndex = this.layers.length - 1;
+        }
+        this.viewportRender();
+        this.updateLayerPanel();
+    }
+
+    moveSelectedToFolder(folderId) {
+        if (!folderId) return;
+        const selectableLayers = this.layers.filter(l => l.selectable && l.type === 'layer' && l.id !== folderId);
+        for (const layer of selectableLayers) {
+            layer.parentId = folderId;
+        }
+        this.clearSelection();
+        this.updateLayerPanel();
+        this.viewportRender();
+    }
+
+    moveSelectedOutOfFolder() {
+        const selectableLayers = this.layers.filter(l => l.selectable && l.type === 'layer');
+        for (const layer of selectableLayers) {
+            layer.parentId = null;
+        }
+        this.clearSelection();
+        this.updateLayerPanel();
+        this.viewportRender();
+    }
+
+    getFolderChildren(folderId) {
+        return this.layers.filter(l => l.parentId === folderId);
+    }
+
+    toggleFolderExpand() {
+        const folder = this.layers[this.activeLayerIndex];
+        if (!folder || folder.type !== 'folder') return;
+        folder.expanded = !folder.expanded;
+        this.updateLayerPanel();
     }
 
     deleteActiveLayer() {
@@ -3985,7 +4067,19 @@ class DrawingApp {
         this.clearSelection();
         if (this.layers.length <= 1) return;
 
-        this.layers.splice(this.activeLayerIndex, 1);
+        const active = this.layers[this.activeLayerIndex];
+        if (active && active.type === 'folder') {
+            const folderId = active.id;
+            this.layers.splice(this.activeLayerIndex, 1);
+            for (let i = this.layers.length - 1; i >= 0; i--) {
+                if (this.layers[i].parentId === folderId) {
+                    this.layers.splice(i, 1);
+                }
+            }
+        } else {
+            this.layers.splice(this.activeLayerIndex, 1);
+        }
+
         if (this.activeLayerIndex >= this.layers.length) {
             this.activeLayerIndex = this.layers.length - 1;
         }
@@ -4065,11 +4159,14 @@ class DrawingApp {
     saveState() {
         const state = this.layers.map(layer => ({
             id: layer.id,
+            type: layer.type,
+            parentId: layer.parentId,
             name: layer.name,
             opacity: layer.opacity,
             blendMode: layer.blendMode,
             visible: layer.visible,
             selectable: layer.selectable,
+            expanded: layer.expanded,
             vectorCommands: JSON.parse(JSON.stringify(layer.vectorCommands || []))
         }));
 
@@ -4092,11 +4189,14 @@ class DrawingApp {
 
         const currentState = this.layers.map(layer => ({
             id: layer.id,
+            type: layer.type,
+            parentId: layer.parentId,
             name: layer.name,
             opacity: layer.opacity,
             blendMode: layer.blendMode,
             visible: layer.visible,
             selectable: layer.selectable,
+            expanded: layer.expanded,
             vectorCommands: JSON.parse(JSON.stringify(layer.vectorCommands || []))
         }));
 
@@ -4116,11 +4216,14 @@ class DrawingApp {
 
         const currentState = this.layers.map(layer => ({
             id: layer.id,
+            type: layer.type,
+            parentId: layer.parentId,
             name: layer.name,
             opacity: layer.opacity,
             blendMode: layer.blendMode,
             visible: layer.visible,
             selectable: layer.selectable,
+            expanded: layer.expanded,
             vectorCommands: JSON.parse(JSON.stringify(layer.vectorCommands || []))
         }));
 
@@ -4137,11 +4240,14 @@ class DrawingApp {
     restoreState(state) {
         this.layers = state.layers.map(s => ({
             id: s.id,
+            type: s.type || 'layer',
+            parentId: s.parentId || null,
             name: s.name,
             opacity: s.opacity,
             blendMode: s.blendMode,
             visible: s.visible,
             selectable: s.selectable !== false,
+            expanded: s.expanded !== false,
             vectorCommands: s.vectorCommands || []
         }));
 
@@ -4160,21 +4266,65 @@ class DrawingApp {
         const layerList = document.getElementById('layerList');
         layerList.innerHTML = '';
 
-        this.layers.forEach((layer, index) => {
+        const foldedFolders = new Set();
+        this.layers.forEach(l => {
+            if (l.type === 'folder' && !l.expanded) foldedFolders.add(l.id);
+        });
+
+        const visibleItems = this.layers.filter(l => {
+            let p = l.parentId;
+            while (p) {
+                if (foldedFolders.has(p)) return false;
+                const parent = this.layers.find(pl => pl.id === p);
+                p = parent ? parent.parentId : null;
+            }
+            return true;
+        });
+
+        const orderedItems = [];
+        const addWithChildren = (item) => {
+            orderedItems.push(item);
+            for (const child of visibleItems) {
+                if (child.parentId === item.id) {
+                    addWithChildren(child);
+                }
+            }
+        };
+        for (const item of visibleItems) {
+            if (!item.parentId) {
+                addWithChildren(item);
+            }
+        }
+
+        orderedItems.forEach((layer) => {
+            const realIndex = this.layers.indexOf(layer);
             const layerItem = document.createElement('div');
-            layerItem.className = 'layer-item' + (index === this.activeLayerIndex ? ' active' : '');
+            layerItem.className = 'layer-item' + (realIndex === this.activeLayerIndex ? ' active' : '') + (layer.type === 'folder' ? ' layer-folder' : '');
+
+            let indentLevel = 0;
+            let parent = layer.parentId;
+            while (parent) {
+                indentLevel++;
+                const p = this.layers.find(pl => pl.id === parent);
+                parent = p ? p.parentId : null;
+            }
+            if (indentLevel > 0) {
+                layerItem.style.paddingLeft = (24 * indentLevel) + 'px';
+            }
+
             layerItem.addEventListener('click', (e) => {
-                if (!e.target.closest('.layer-visibility') && !e.target.closest('.layer-name-input') && !e.target.closest('.layer-select-cb')) {
+                if (!e.target.closest('.layer-visibility') && !e.target.closest('.layer-name-input') && !e.target.closest('.layer-select-cb') && !e.target.closest('.layer-folder-toggle')) {
                     if (this.pathEditMode) this.togglePathEdit();
-                    if (index !== this.activeLayerIndex) {
+                    if (realIndex !== this.activeLayerIndex) {
                         this.layers.forEach(l => l.selectable = false);
                     }
-                    this.activeLayerIndex = index;
-                    this.layers[index].selectable = true;
+                    this.activeLayerIndex = realIndex;
+                    this.layers[realIndex].selectable = true;
                     this.updateLayerPanel();
-                    document.getElementById('layerOpacity').value = Math.round(layer.opacity * 100);
-                    document.getElementById('layerOpacityValue').value = Math.round(layer.opacity * 100);
-                    document.getElementById('layerBlendMode').value = layer.blendMode;
+                    const activeLayer = this.layers[this.activeLayerIndex];
+                    document.getElementById('layerOpacity').value = activeLayer.type !== 'folder' ? Math.round(activeLayer.opacity * 100) : 100;
+                    document.getElementById('layerOpacityValue').value = activeLayer.type !== 'folder' ? Math.round(activeLayer.opacity * 100) : 100;
+                    document.getElementById('layerBlendMode').value = activeLayer.type !== 'folder' ? activeLayer.blendMode : 'source-over';
                     this.syncColorPickerToSelection();
                     this.viewportRender();
                 }
@@ -4183,14 +4333,31 @@ class DrawingApp {
             const selCb = document.createElement('input');
             selCb.type = 'checkbox';
             selCb.className = 'layer-select-cb';
-            selCb.checked = index === this.activeLayerIndex ? true : (layer.selectable !== false);
-            selCb.disabled = index === this.activeLayerIndex;
+            if (layer.type === 'folder') {
+                selCb.checked = false;
+                selCb.disabled = false;
+            } else {
+                selCb.checked = realIndex === this.activeLayerIndex ? true : (layer.selectable !== false);
+                selCb.disabled = realIndex === this.activeLayerIndex;
+            }
             selCb.addEventListener('change', (e) => {
                 e.stopPropagation();
                 layer.selectable = selCb.checked;
                 this.updateLayerPanel();
             });
             layerItem.appendChild(selCb);
+
+            if (layer.type === 'folder') {
+                const foldBtn = document.createElement('button');
+                foldBtn.className = 'layer-folder-toggle';
+                foldBtn.textContent = layer.expanded ? '\u25BC' : '\u25B6';
+                foldBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    layer.expanded = !layer.expanded;
+                    this.updateLayerPanel();
+                });
+                layerItem.appendChild(foldBtn);
+            }
 
             const visBtn = document.createElement('button');
             visBtn.className = 'layer-visibility';
@@ -4206,7 +4373,8 @@ class DrawingApp {
 
             const thumb = document.createElement('div');
             thumb.className = 'layer-thumb';
-            const thumbCanvas = this.createLayerThumbnail(layer, 32, 32);
+            const thumbLayer = layer.type === 'folder' ? { vectorCommands: this.getFolderChildCommands(layer.id) } : layer;
+            const thumbCanvas = this.createLayerThumbnail(thumbLayer, 32, 32);
             thumb.appendChild(thumbCanvas);
             layerItem.appendChild(thumb);
 
@@ -4222,9 +4390,26 @@ class DrawingApp {
             layerList.appendChild(layerItem);
         });
 
-        document.getElementById('layerOpacity').value = Math.round(this.layers[this.activeLayerIndex].opacity * 100);
-        document.getElementById('layerOpacityValue').value = Math.round(this.layers[this.activeLayerIndex].opacity * 100);
-        document.getElementById('layerBlendMode').value = this.layers[this.activeLayerIndex].blendMode;
+        const activeLayer = this.layers[this.activeLayerIndex];
+        if (activeLayer) {
+            document.getElementById('layerOpacity').value = activeLayer.type !== 'folder' ? Math.round(activeLayer.opacity * 100) : 100;
+            document.getElementById('layerOpacityValue').value = activeLayer.type !== 'folder' ? Math.round(activeLayer.opacity * 100) : 100;
+            document.getElementById('layerBlendMode').value = activeLayer.type !== 'folder' ? activeLayer.blendMode : 'source-over';
+        }
+    }
+
+    getFolderChildCommands(folderId) {
+        const commands = [];
+        for (const l of this.layers) {
+            if (l.parentId === folderId) {
+                if (l.type === 'folder') {
+                    commands.push(...this.getFolderChildCommands(l.id));
+                } else {
+                    commands.push(...(l.vectorCommands || []));
+                }
+            }
+        }
+        return commands;
     }
 
     createLayerThumbnail(layer, w, h) {
@@ -4316,11 +4501,31 @@ class DrawingApp {
             svgParts.push(`  </defs>`);
         }
 
+        const childMap = new Map();
+        const roots = [];
         for (let li = this.layers.length - 1; li >= 0; li--) {
             const layer = this.layers[li];
+            if (layer.parentId) {
+                if (!childMap.has(layer.parentId)) childMap.set(layer.parentId, []);
+                childMap.get(layer.parentId).push(layer);
+            } else {
+                roots.push(layer);
+            }
+        }
 
+        const emitLayer = (layer, depth) => {
+            const indent = '  '.repeat(depth + 1);
             const commands = layer.vectorCommands || [];
             const hasVector = commands.some(cmd => ['brush', 'fill', 'line', 'rect', 'circle', 'image'].includes(cmd.type));
+
+            if (layer.type === 'folder') {
+                svgParts.push(`${indent}<g id="folder_${layer.id}" inkscape:label="${layer.name.replace(/"/g, '&quot;')}" display="${layer.visible === false ? 'none' : 'inline'}">`);
+                for (const kid of (childMap.get(layer.id) || [])) {
+                    emitLayer(kid, depth + 1);
+                }
+                svgParts.push(`${indent}</g>`);
+                return;
+            }
 
             const layerLabel = layer.name.replace(/"/g, '&quot;');
             const displayVal = layer.visible === false ? 'none' : 'inline';
@@ -4333,13 +4538,13 @@ class DrawingApp {
                 `style="mix-blend-mode: ${this.getCSSBlendMode(layer.blendMode)}"`
             ].join(' ');
 
-            svgParts.push(`  <g ${layerGroupAttrs}>`);
+            svgParts.push(`${indent}<g ${layerGroupAttrs}>`);
 
             if (hasVector) {
                 for (const cmd of commands) {
                     if (cmd.type === 'brush') {
                         if (cmd.points.length < 2) {
-                            svgParts.push(`    <circle cx="${cmd.points[0].x.toFixed(2)}" cy="${cmd.points[0].y.toFixed(2)}" r="${cmd.size / 2}" fill="${cmd.color}" opacity="${cmd.opacity}"/>`);
+                            svgParts.push(`${indent}  <circle cx="${cmd.points[0].x.toFixed(2)}" cy="${cmd.points[0].y.toFixed(2)}" r="${cmd.size / 2}" fill="${cmd.color}" opacity="${cmd.opacity}"/>`);
                         } else {
                             let d = `M ${cmd.points[0].x.toFixed(2)} ${cmd.points[0].y.toFixed(2)}`;
                             for (let i = 1; i < cmd.points.length; i++) {
@@ -4360,7 +4565,7 @@ class DrawingApp {
                                     d += ' Z';
                                 }
                             }
-                            svgParts.push(`    <path d="${d}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="${cmd.lineCap || 'round'}" stroke-linejoin="${cmd.lineJoin || 'round'}" fill="none" opacity="${cmd.opacity}"/>`);
+                            svgParts.push(`${indent}  <path d="${d}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="${cmd.lineCap || 'round'}" stroke-linejoin="${cmd.lineJoin || 'round'}" fill="none" opacity="${cmd.opacity}"/>`);
                         }
                     } else if (cmd.type === 'fill') {
                         const pts = cmd.points;
@@ -4399,21 +4604,21 @@ class DrawingApp {
                             const key = JSON.stringify(cmd.gradient);
                             if (gradientMap.has(key)) fillAttr = `url(#${gradientMap.get(key)})`;
                         }
-                        svgParts.push(`    <path d="${d}" fill="${fillAttr}" stroke="none" opacity="${cmd.opacity}" fill-rule="evenodd"/>`);
+                        svgParts.push(`${indent}  <path d="${d}" fill="${fillAttr}" stroke="none" opacity="${cmd.opacity}" fill-rule="evenodd"/>`);
                     } else if (cmd.type === 'line') {
-                        svgParts.push(`    <line x1="${cmd.x1.toFixed(2)}" y1="${cmd.y1.toFixed(2)}" x2="${cmd.x2.toFixed(2)}" y2="${cmd.y2.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="${cmd.lineCap || 'round'}" stroke-linejoin="${cmd.lineJoin || 'round'}" opacity="${cmd.opacity}"/>`);
+                        svgParts.push(`${indent}  <line x1="${cmd.x1.toFixed(2)}" y1="${cmd.y1.toFixed(2)}" x2="${cmd.x2.toFixed(2)}" y2="${cmd.y2.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="${cmd.lineCap || 'round'}" stroke-linejoin="${cmd.lineJoin || 'round'}" opacity="${cmd.opacity}"/>`);
                     } else if (cmd.type === 'rect') {
                         const x = Math.min(cmd.x1, cmd.x2);
                         const y = Math.min(cmd.y1, cmd.y2);
                         const w = Math.abs(cmd.x2 - cmd.x1);
                         const h = Math.abs(cmd.y2 - cmd.y1);
-                        svgParts.push(`    <rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${w.toFixed(2)}" height="${h.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" fill="none" stroke-linecap="${cmd.lineCap || 'round'}" stroke-linejoin="${cmd.lineJoin || 'round'}" opacity="${cmd.opacity}"/>`);
+                        svgParts.push(`${indent}  <rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${w.toFixed(2)}" height="${h.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" fill="none" stroke-linecap="${cmd.lineCap || 'round'}" stroke-linejoin="${cmd.lineJoin || 'round'}" opacity="${cmd.opacity}"/>`);
                     } else if (cmd.type === 'circle') {
                         const cx = (cmd.x1 + cmd.x2) / 2;
                         const cy = (cmd.y1 + cmd.y2) / 2;
                         const rx = Math.abs(cmd.x2 - cmd.x1) / 2;
                         const ry = Math.abs(cmd.y2 - cmd.y1) / 2;
-                        svgParts.push(`    <ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" fill="none" stroke-linecap="${cmd.lineCap || 'round'}" stroke-linejoin="${cmd.lineJoin || 'round'}" opacity="${cmd.opacity}"/>`);
+                        svgParts.push(`${indent}  <ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" fill="none" stroke-linecap="${cmd.lineCap || 'round'}" stroke-linejoin="${cmd.lineJoin || 'round'}" opacity="${cmd.opacity}"/>`);
                     } else if (cmd.type === 'image') {
                         const img = this.imageCache[cmd.src];
                         if (img) {
@@ -4424,13 +4629,17 @@ class DrawingApp {
                                 const deg = cmd.rotation * 180 / Math.PI;
                                 imgAttrs += ` transform="rotate(${deg.toFixed(2)} ${cx.toFixed(2)} ${cy.toFixed(2)})"`;
                             }
-                            svgParts.push(`    <image ${imgAttrs} href="${cmd.src}" opacity="${cmd.opacity !== undefined ? cmd.opacity : 1}"/>`);
+                            svgParts.push(`${indent}  <image ${imgAttrs} href="${cmd.src}" opacity="${cmd.opacity !== undefined ? cmd.opacity : 1}"/>`);
                         }
                     }
                 }
             }
 
-            svgParts.push(`  </g>`);
+            svgParts.push(`${indent}</g>`);
+        };
+
+        for (const root of roots) {
+            emitLayer(root, 0);
         }
 
         svgParts.push(`</svg>`);
@@ -4658,17 +4867,20 @@ ${svgContent}
 
         this.clearAllLayers();
 
-        const layerGroups = this.extractLayers(svg);
-        if (layerGroups.length > 0) {
-            for (let i = 0; i < layerGroups.length; i++) {
-                const { name, opacity, visible, elements, groupEl } = layerGroups[i];
-                this.addLayer(name);
-                const layerIdx = this.activeLayerIndex;
-                this.layers[layerIdx].opacity = opacity;
-                this.layers[layerIdx].visible = visible;
-                this.parseSVGElements(elements, this.layers[layerIdx].vectorCommands, scaleX, scaleY, vbX, vbY, svgGradients);
-                if (groupEl) {
-                    const style = groupEl.getAttribute('style') || '';
+        const importGroup = (parentEl, parentId) => {
+            for (const child of parentEl.children) {
+                if (child.tagName.toLowerCase() !== 'g') continue;
+                if (child.getAttribute('inkscape:groupmode') === 'layer') {
+                    const name = child.getAttribute('inkscape:label') || 'Layer';
+                    const opacity = parseFloat(child.getAttribute('opacity'));
+                    const display = child.getAttribute('display');
+                    const visible = display !== 'none';
+                    this.addLayer(name, parentId);
+                    const layerIdx = this.activeLayerIndex;
+                    this.layers[layerIdx].opacity = isNaN(opacity) ? 1 : opacity;
+                    this.layers[layerIdx].visible = visible;
+                    this.parseSVGElements(Array.from(child.children), this.layers[layerIdx].vectorCommands, scaleX, scaleY, vbX, vbY, svgGradients);
+                    const style = child.getAttribute('style') || '';
                     const match = style.match(/mix-blend-mode:\s*([\w-]+)/);
                     if (match) {
                         const cssBlend = match[1];
@@ -4694,11 +4906,24 @@ ${svgContent}
                             this.layers[layerIdx].blendMode = canvasBlendMap[cssBlend];
                         }
                     }
+                } else {
+                    const folderId = this.addFolder(child.getAttribute('inkscape:label') || 'Folder');
+                    const folderIdx = this.layers.findIndex(l => l.id === folderId);
+                    if (parentId) this.layers[folderIdx].parentId = parentId;
+                    const display = child.getAttribute('display');
+                    if (display === 'none') this.layers[folderIdx].visible = false;
+                    importGroup(child, folderId);
                 }
             }
+        };
+
+        const topGroups = Array.from(svg.children).filter(c => c.tagName.toLowerCase() === 'g');
+
+        if (topGroups.length > 0) {
+            importGroup(svg, null);
         } else {
-            this.addLayer('Imported SVG');
             const allElements = svg.children;
+            this.addLayer('Imported SVG');
             this.parseSVGElements(allElements, this.layers[this.activeLayerIndex].vectorCommands, scaleX, scaleY, vbX, vbY, svgGradients);
         }
 
@@ -6116,15 +6341,25 @@ ${svgContent}
             }
             this.editingPathIndex = (this.layers[this.activeLayerIndex].vectorCommands || []).indexOf(this.editingPathCmd);
             if (this.editingPathCmd.type === 'fill' && !Array.isArray(this.editingPathCmd.points)) {
-                this._savedFillHoles = this.editingPathCmd.points.holes || [];
-                this.editingPathCmd.points = this.editingPathCmd.points.outer;
+                const outer = this.editingPathCmd.points.outer;
+                const holes = this.editingPathCmd.points.holes || [];
+                this._savedFillHoles = holes;
+                const all = [];
+                this._editingRingEnds = [];
+                for (const p of outer) all.push(p);
+                this._editingRingEnds.push(outer.length);
+                for (const hole of holes) {
+                    for (const p of hole) all.push(p);
+                    this._editingRingEnds.push(this._editingRingEnds[this._editingRingEnds.length - 1] + hole.length);
+                }
+                this.editingPathCmd.points = all;
             }
             document.getElementById('deleteSelectedBtn').style.display = 'none';
             document.getElementById('convertBtn').style.display = 'none';
             document.getElementById('moveBackBtn').style.display = 'none';
             document.getElementById('moveForwardBtn').style.display = 'none';
             document.getElementById('duplicateBtn').style.display = 'none';
-            const layerBtns = ['addLayerBtn', 'deleteLayerBtn', 'moveUpLayerBtn', 'moveDownLayerBtn', 'mergeDownBtn', 'renameLayerBtn', 'clearLayerBtn'];
+            const layerBtns = ['addLayerBtn', 'deleteLayerBtn', 'moveUpLayerBtn', 'moveDownLayerBtn', 'mergeDownBtn', 'renameLayerBtn', 'clearLayerBtn', 'addFolderBtn', 'deleteFolderBtn', 'moveToFolderBtn', 'moveOutOfFolderBtn'];
             layerBtns.forEach(id => {
                 document.getElementById(id).disabled = true;
                 document.getElementById(id).style.opacity = '0.3';
@@ -6183,7 +6418,18 @@ ${svgContent}
     }
 
     exitPathEditMode() {
-        if (this.editingPathCmd && this.editingPathCmd.type === 'fill' && this._savedFillHoles) {
+        if (this.editingPathCmd && this.editingPathCmd.type === 'fill' && Array.isArray(this.editingPathCmd.points) && this._editingRingEnds) {
+            const all = this.editingPathCmd.points;
+            const outer = all.slice(0, this._editingRingEnds[0]);
+            const holes = [];
+            for (let ri = 1; ri < this._editingRingEnds.length; ri++) {
+                holes.push(all.slice(this._editingRingEnds[ri - 1], this._editingRingEnds[ri]));
+            }
+            this.editingPathCmd.points = { outer, holes };
+            this._editingRingEnds = null;
+            this._savedFillHoles = null;
+        }
+        if (this.editingPathCmd && this.editingPathCmd.type === 'fill' && this._savedFillHoles && !Array.isArray(this.editingPathCmd.points)) {
             this.editingPathCmd.points = { outer: this.editingPathCmd.points, holes: this._savedFillHoles };
             this._savedFillHoles = null;
         }
@@ -6243,10 +6489,14 @@ ${svgContent}
 
         const isClosed = this.editingPathCmd.type === 'fill' || this.editingPathCmd.closed;
 
-        for (let i = 0; i < points.length; i++) {
-            const p = points[i];
-            if (i < points.length - 1) {
-                const next = points[i + 1];
+        const rings = this._editingRingEnds
+            ? (() => { const r = []; let s = 0; for (const e of this._editingRingEnds) { r.push({ start: s, end: e }); s = e; } return r; })()
+            : [{ start: 0, end: points.length }];
+
+        for (const ring of rings) {
+            for (let ri = ring.start; ri < ring.end - 1; ri++) {
+                const p = points[ri];
+                const next = points[ri + 1];
                 ctx.strokeStyle = '#4a9eff';
                 ctx.lineWidth = pathLineWidth;
                 ctx.setLineDash([dashLen, dashLen]);
@@ -6260,23 +6510,23 @@ ${svgContent}
                 ctx.stroke();
                 ctx.setLineDash([]);
             }
-        }
 
-        if (isClosed && points.length >= 2) {
-            const last = points[points.length - 1];
-            const first = points[0];
-            ctx.strokeStyle = '#4a9eff';
-            ctx.lineWidth = pathLineWidth;
-            ctx.setLineDash([dashLen, dashLen]);
-            ctx.beginPath();
-            ctx.moveTo(last.x, last.y);
-            if (last.cp2x !== undefined && first.cp1x !== undefined) {
-                ctx.bezierCurveTo(last.cp2x, last.cp2y, first.cp1x, first.cp1y, first.x, first.y);
-            } else {
-                ctx.lineTo(first.x, first.y);
+            if (isClosed && ring.end - ring.start >= 2) {
+                const last = points[ring.end - 1];
+                const first = points[ring.start];
+                ctx.strokeStyle = '#4a9eff';
+                ctx.lineWidth = pathLineWidth;
+                ctx.setLineDash([dashLen, dashLen]);
+                ctx.beginPath();
+                ctx.moveTo(last.x, last.y);
+                if (last.cp2x !== undefined && first.cp1x !== undefined) {
+                    ctx.bezierCurveTo(last.cp2x, last.cp2y, first.cp1x, first.cp1y, first.x, first.y);
+                } else {
+                    ctx.lineTo(first.x, first.y);
+                }
+                ctx.stroke();
+                ctx.setLineDash([]);
             }
-            ctx.stroke();
-            ctx.setLineDash([]);
         }
 
         for (let i = 0; i < points.length; i++) {
@@ -6329,12 +6579,20 @@ ${svgContent}
         if (this.addPointMode && this.hoveredSegmentIndex >= 0) {
             const idx = this.hoveredSegmentIndex;
             const isClosed = this.editingPathCmd.type === 'fill' || this.editingPathCmd.closed;
-            const isClosingSeg = isClosed && idx >= points.length - 1 && points.length >= 2;
+
+            const rings = this._editingRingEnds
+                ? (() => { const r = []; let s = 0; for (const e of this._editingRingEnds) { r.push({ start: s, end: e }); s = e; } return r; })()
+                : [{ start: 0, end: points.length }];
+            let ringStart = 0, ringEnd = points.length;
+            for (const ring of rings) {
+                if (idx >= ring.start && idx < ring.end) { ringStart = ring.start; ringEnd = ring.end; break; }
+            }
+            const isClosingSeg = isClosed && idx >= ringEnd - 1 && ringEnd - ringStart >= 2;
 
             let p1, p2;
             if (isClosingSeg) {
-                p1 = points[points.length - 1];
-                p2 = points[0];
+                p1 = points[ringEnd - 1];
+                p2 = points[ringStart];
             } else if (idx < points.length - 1) {
                 p1 = points[idx];
                 p2 = points[idx + 1];
@@ -6417,41 +6675,47 @@ ${svgContent}
 
         const isClosed = this.editingPathCmd.type === 'fill' || this.editingPathCmd.closed;
 
-        for (let i = 0; i < points.length - 1; i++) {
-            const p1 = points[i];
-            const p2 = points[i + 1];
-            const hasCp = p1.cp2x !== undefined && p2.cp1x !== undefined;
-            if (hasCp) {
-                const t = this.closestTOnCubicBezier(p1.x, p1.y, p1.cp2x, p1.cp2y, p2.cp1x, p2.cp1y, p2.x, p2.y, mx, my);
-                const pt = this.cubicBezierPoint(p1.x, p1.y, p1.cp2x, p1.cp2y, p2.cp1x, p2.cp1y, p2.x, p2.y, t);
-                if (this.dist(mx, my, pt.x, pt.y) < hitRadius) {
-                    this.hoveredSegmentT = t;
-                    return i;
-                }
-            } else {
-                if (this.distToSegment(mx, my, p1.x, p1.y, p2.x, p2.y) < hitRadius) {
-                    this.hoveredSegmentT = 0.5;
-                    return i;
+        const rings = this._editingRingEnds
+            ? (() => { const r = []; let s = 0; for (const e of this._editingRingEnds) { r.push({ start: s, end: e }); s = e; } return r; })()
+            : [{ start: 0, end: points.length }];
+
+        for (const ring of rings) {
+            for (let i = ring.start; i < ring.end - 1; i++) {
+                const p1 = points[i];
+                const p2 = points[i + 1];
+                const hasCp = p1.cp2x !== undefined && p2.cp1x !== undefined;
+                if (hasCp) {
+                    const t = this.closestTOnCubicBezier(p1.x, p1.y, p1.cp2x, p1.cp2y, p2.cp1x, p2.cp1y, p2.x, p2.y, mx, my);
+                    const pt = this.cubicBezierPoint(p1.x, p1.y, p1.cp2x, p1.cp2y, p2.cp1x, p2.cp1y, p2.x, p2.y, t);
+                    if (this.dist(mx, my, pt.x, pt.y) < hitRadius) {
+                        this.hoveredSegmentT = t;
+                        return i;
+                    }
+                } else {
+                    if (this.distToSegment(mx, my, p1.x, p1.y, p2.x, p2.y) < hitRadius) {
+                        this.hoveredSegmentT = 0.5;
+                        return i;
+                    }
                 }
             }
-        }
 
-        if (isClosed && points.length >= 2) {
-            const last = points[points.length - 1];
-            const first = points[0];
-            const hasCp = last.cp2x !== undefined && first.cp1x !== undefined;
-            const idx = points.length - 1;
-            if (hasCp) {
-                const t = this.closestTOnCubicBezier(last.x, last.y, last.cp2x, last.cp2y, first.cp1x, first.cp1y, first.x, first.y, mx, my);
-                const pt = this.cubicBezierPoint(last.x, last.y, last.cp2x, last.cp2y, first.cp1x, first.cp1y, first.x, first.y, t);
-                if (this.dist(mx, my, pt.x, pt.y) < hitRadius) {
-                    this.hoveredSegmentT = t;
-                    return idx;
-                }
-            } else {
-                if (this.distToSegment(mx, my, last.x, last.y, first.x, first.y) < hitRadius) {
-                    this.hoveredSegmentT = 0.5;
-                    return idx;
+            if (isClosed && ring.end - ring.start >= 2) {
+                const last = points[ring.end - 1];
+                const first = points[ring.start];
+                const hasCp = last.cp2x !== undefined && first.cp1x !== undefined;
+                const idx = ring.end - 1;
+                if (hasCp) {
+                    const t = this.closestTOnCubicBezier(last.x, last.y, last.cp2x, last.cp2y, first.cp1x, first.cp1y, first.x, first.y, mx, my);
+                    const pt = this.cubicBezierPoint(last.x, last.y, last.cp2x, last.cp2y, first.cp1x, first.cp1y, first.x, first.y, t);
+                    if (this.dist(mx, my, pt.x, pt.y) < hitRadius) {
+                        this.hoveredSegmentT = t;
+                        return idx;
+                    }
+                } else {
+                    if (this.distToSegment(mx, my, last.x, last.y, first.x, first.y) < hitRadius) {
+                        this.hoveredSegmentT = 0.5;
+                        return idx;
+                    }
                 }
             }
         }
@@ -6466,13 +6730,22 @@ ${svgContent}
         const idx = this.hoveredSegmentIndex;
         const points = this.editingPathCmd.points;
         const isClosed = this.editingPathCmd.type === 'fill' || this.editingPathCmd.closed;
-        const isClosingSeg = isClosed && idx >= points.length - 1 && points.length >= 2;
+
+        const rings = this._editingRingEnds
+            ? (() => { const r = []; let s = 0; for (const e of this._editingRingEnds) { r.push({ start: s, end: e }); s = e; } return r; })()
+            : [{ start: 0, end: points.length }];
+
+        let ringStart = 0, ringEnd = points.length;
+        for (const ring of rings) {
+            if (idx >= ring.start && idx < ring.end) { ringStart = ring.start; ringEnd = ring.end; break; }
+        }
+        const isClosingSeg = isClosed && idx >= ringEnd - 1 && ringEnd - ringStart >= 2;
 
         let p0, p3, insertAt;
         if (isClosingSeg) {
-            p0 = points[points.length - 1];
-            p3 = points[0];
-            insertAt = points.length;
+            p0 = points[ringEnd - 1];
+            p3 = points[ringStart];
+            insertAt = ringEnd;
         } else {
             p0 = points[idx];
             p3 = points[idx + 1];
@@ -6506,6 +6779,13 @@ ${svgContent}
         } else {
             points.splice(insertAt, 0, { x: mx, y: my });
             this.selectedPointIndex = insertAt;
+        }
+
+        // Update ring ends
+        if (this._editingRingEnds) {
+            for (let ri = 0; ri < this._editingRingEnds.length; ri++) {
+                if (insertAt <= this._editingRingEnds[ri]) this._editingRingEnds[ri]++;
+            }
         }
 
         this.viewportRender();
@@ -6574,6 +6854,11 @@ ${svgContent}
             if (e.detail === 2) {
                 this.saveState();
                 this.editingPathCmd.points.splice(pointIdx, 1);
+                if (this._editingRingEnds) {
+                    for (let ri = 0; ri < this._editingRingEnds.length; ri++) {
+                        if (pointIdx < this._editingRingEnds[ri]) this._editingRingEnds[ri]--;
+                    }
+                }
                 if (this.editingPathCmd.points.length === 0) {
                     this.exitPathEditMode();
                     this.viewportRender();
