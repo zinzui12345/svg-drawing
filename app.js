@@ -4100,25 +4100,128 @@ class DrawingApp {
         this.updateLayerPanel();
     }
 
-    moveLayerUp() {
-        if (this.activeLayerIndex <= 0) return;
+    getBlockIds(id) {
+        const ids = [id];
+        for (const l of this.layers) {
+            if (l.parentId === id) {
+                ids.push(l.id);
+                if (l.type === 'folder') {
+                    ids.push(...this.getBlockIds(l.id).slice(1));
+                }
+            }
+        }
+        return ids;
+    }
 
-        const temp = this.layers[this.activeLayerIndex];
-        this.layers[this.activeLayerIndex] = this.layers[this.activeLayerIndex - 1];
-        this.layers[this.activeLayerIndex - 1] = temp;
-        this.activeLayerIndex--;
+    getRootId(id) {
+        while (true) {
+            const l = this.layers.find(la => la.id === id);
+            if (!l || !l.parentId) return id;
+            id = l.parentId;
+        }
+    }
+
+    moveLayerUp() {
+        const active = this.layers[this.activeLayerIndex];
+        if (!active) return;
+
+        if (active.parentId) {
+            const siblingIndices = this.layers
+                .map((l, i) => l.parentId === active.parentId ? i : -1)
+                .filter(i => i >= 0)
+                .sort((a, b) => a - b);
+            const activePos = siblingIndices.indexOf(this.activeLayerIndex);
+            if (activePos <= 0) return;
+            const aboveIdx = siblingIndices[activePos - 1];
+            const sorted = [this.activeLayerIndex, aboveIdx].sort((a, b) => b - a);
+            const removed = sorted.map(i => this.layers.splice(i, 1)[0]);
+            this.layers.splice(Math.min(this.activeLayerIndex, aboveIdx), 0, ...removed);
+            this.activeLayerIndex = this.layers.findIndex(l => l.id === active.id);
+            this.clearSelection();
+            this.viewportRender();
+            this.updateLayerPanel();
+            return;
+        }
+
+        const rootId = this.getRootId(active.id);
+        const rootIdx = this.layers.findIndex(l => l.id === rootId);
+        if (rootIdx <= 0) return;
+
+        let aboveIdx = rootIdx - 1;
+        while (aboveIdx >= 0 && this.getRootId(this.layers[aboveIdx].id) === rootId) {
+            aboveIdx--;
+        }
+        if (aboveIdx < 0) return;
+
+        const aboveRootId = this.getRootId(this.layers[aboveIdx].id);
+        const aboveBlockIds = this.getBlockIds(aboveRootId);
+        const ourBlockIds = this.getBlockIds(rootId);
+
+        const sortedOurIds = [...ourBlockIds].sort((a, b) =>
+            this.layers.findIndex(l => l.id === b) - this.layers.findIndex(l => l.id === a)
+        );
+        const ourItems = sortedOurIds.map(id => {
+            const idx = this.layers.findIndex(l => l.id === id);
+            return this.layers.splice(idx, 1)[0];
+        }).reverse();
+
+        const aboveStart = Math.min(...aboveBlockIds.map(id => this.layers.findIndex(l => l.id === id)));
+        this.layers.splice(aboveStart, 0, ...ourItems);
+
+        this.activeLayerIndex = this.layers.findIndex(l => l.id === active.id);
         this.clearSelection();
         this.viewportRender();
         this.updateLayerPanel();
     }
 
     moveLayerDown() {
-        if (this.activeLayerIndex >= this.layers.length - 1) return;
+        const active = this.layers[this.activeLayerIndex];
+        if (!active) return;
 
-        const temp = this.layers[this.activeLayerIndex];
-        this.layers[this.activeLayerIndex] = this.layers[this.activeLayerIndex + 1];
-        this.layers[this.activeLayerIndex + 1] = temp;
-        this.activeLayerIndex++;
+        if (active.parentId) {
+            const siblingIndices = this.layers
+                .map((l, i) => l.parentId === active.parentId ? i : -1)
+                .filter(i => i >= 0)
+                .sort((a, b) => a - b);
+            const activePos = siblingIndices.indexOf(this.activeLayerIndex);
+            if (activePos >= siblingIndices.length - 1) return;
+            const belowIdx = siblingIndices[activePos + 1];
+            const sorted = [belowIdx, this.activeLayerIndex].sort((a, b) => b - a);
+            const removed = sorted.map(i => this.layers.splice(i, 1)[0]);
+            this.layers.splice(Math.min(this.activeLayerIndex, belowIdx), 0, ...removed);
+            this.activeLayerIndex = this.layers.findIndex(l => l.id === active.id);
+            this.clearSelection();
+            this.viewportRender();
+            this.updateLayerPanel();
+            return;
+        }
+
+        const rootId = this.getRootId(active.id);
+        const ourBlockIds = this.getBlockIds(rootId);
+        const rootEnd = Math.max(...ourBlockIds.map(id => this.layers.findIndex(l => l.id === id)));
+        if (rootEnd >= this.layers.length - 1) return;
+
+        let belowIdx = rootEnd + 1;
+        while (belowIdx < this.layers.length && this.getRootId(this.layers[belowIdx].id) === rootId) {
+            belowIdx++;
+        }
+        if (belowIdx >= this.layers.length) return;
+
+        const belowRootId = this.getRootId(this.layers[belowIdx].id);
+        const belowBlockIds = this.getBlockIds(belowRootId);
+
+        const sortedOurIds = [...ourBlockIds].sort((a, b) =>
+            this.layers.findIndex(l => l.id === b) - this.layers.findIndex(l => l.id === a)
+        );
+        const ourItems = sortedOurIds.map(id => {
+            const idx = this.layers.findIndex(l => l.id === id);
+            return this.layers.splice(idx, 1)[0];
+        }).reverse();
+
+        const belowEnd = Math.max(...belowBlockIds.map(id => this.layers.findIndex(l => l.id === id)));
+        this.layers.splice(belowEnd + 1, 0, ...ourItems);
+
+        this.activeLayerIndex = this.layers.findIndex(l => l.id === active.id);
         this.clearSelection();
         this.viewportRender();
         this.updateLayerPanel();
