@@ -148,8 +148,10 @@
                 <div class="layer-controls">
                     <button class="layer-btn" id="addFolderBtn" title="Add Folder">+F</button>
                     <button class="layer-btn" id="deleteFolderBtn" title="Delete Folder">-F</button>
-                    <button class="layer-btn" id="moveToFolderBtn" title="Move to Folder">Mv&gt;</button>
-                    <button class="layer-btn" id="moveOutOfFolderBtn" title="Move Out of Folder">Mv&lt;</button>
+                    <select id="moveToFolderSelect" class="folder-move-select">
+                        <option value="">Move to folder...</option>
+                        <option value="...">(root)</option>
+                    </select>
                 </div>
                 <div class="layer-opacity">
                     <label class="tool-label">Opacity</label>

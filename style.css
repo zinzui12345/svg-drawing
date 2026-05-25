@@ -362,6 +362,17 @@ input.spinbox:focus {
     font-weight: 600;
 }
 
+.folder-move-select {
+    flex: 1;
+    padding: 2px 4px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 11px;
+    min-width: 0;
+}
+
 .shape-list {
     display: flex;
     gap: 6px;

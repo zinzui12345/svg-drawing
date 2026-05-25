@@ -452,13 +452,18 @@ class DrawingApp {
         document.getElementById('renameLayerBtn').addEventListener('click', () => this.renameActiveLayer());
         document.getElementById('addFolderBtn').addEventListener('click', () => { this.addFolder(); this.saveState(); });
         document.getElementById('deleteFolderBtn').addEventListener('click', () => { this.deleteFolder(); this.saveState(); });
-        document.getElementById('moveToFolderBtn').addEventListener('click', () => {
-            const folders = this.layers.filter(l => l.type === 'folder');
-            if (folders.length === 0) { alert('No folders'); return; }
-            const folderId = prompt('Enter folder ID to move selected to:');
-            if (folderId) this.moveSelectedToFolder(parseInt(folderId));
+        document.getElementById('moveToFolderSelect').addEventListener('change', (e) => {
+            const val = e.target.value;
+            if (!val) return;
+            if (val === '...') {
+                this.moveSelectedOutOfFolder();
+                this.saveState();
+            } else {
+                this.moveSelectedToFolder(parseInt(val));
+                this.saveState();
+            }
+            e.target.value = '';
         });
-        document.getElementById('moveOutOfFolderBtn').addEventListener('click', () => { this.moveSelectedOutOfFolder(); this.saveState(); });
 
         document.getElementById('layerOpacity').addEventListener('input', (e) => {
             const opacity = parseInt(e.target.value) / 100;
@@ -4079,17 +4084,9 @@ class DrawingApp {
         if (this.layers.length <= 1) return;
 
         const active = this.layers[this.activeLayerIndex];
-        if (active && active.type === 'folder') {
-            const folderId = active.id;
-            this.layers.splice(this.activeLayerIndex, 1);
-            for (let i = this.layers.length - 1; i >= 0; i--) {
-                if (this.layers[i].parentId === folderId) {
-                    this.layers.splice(i, 1);
-                }
-            }
-        } else {
-            this.layers.splice(this.activeLayerIndex, 1);
-        }
+        if (active && active.type === 'folder') return;
+
+        this.layers.splice(this.activeLayerIndex, 1);
 
         if (this.activeLayerIndex >= this.layers.length) {
             this.activeLayerIndex = this.layers.length - 1;
@@ -4406,6 +4403,19 @@ class DrawingApp {
 
             layerList.appendChild(layerItem);
         });
+
+        const folderSelect = document.getElementById('moveToFolderSelect');
+        const currentVal = folderSelect.value;
+        folderSelect.innerHTML = '<option value="">Move to folder...</option><option value="...">(root)</option>';
+        for (const l of this.layers) {
+            if (l.type === 'folder') {
+                const opt = document.createElement('option');
+                opt.value = l.id;
+                opt.textContent = l.name;
+                folderSelect.appendChild(opt);
+            }
+        }
+        folderSelect.value = currentVal && Array.from(folderSelect.options).some(o => o.value === currentVal) ? currentVal : '';
 
         const activeLayer = this.layers[this.activeLayerIndex];
         if (activeLayer) {
@@ -6376,7 +6386,7 @@ ${svgContent}
             document.getElementById('moveBackBtn').style.display = 'none';
             document.getElementById('moveForwardBtn').style.display = 'none';
             document.getElementById('duplicateBtn').style.display = 'none';
-            const layerBtns = ['addLayerBtn', 'deleteLayerBtn', 'moveUpLayerBtn', 'moveDownLayerBtn', 'mergeDownBtn', 'renameLayerBtn', 'clearLayerBtn', 'addFolderBtn', 'deleteFolderBtn', 'moveToFolderBtn', 'moveOutOfFolderBtn'];
+            const layerBtns = ['addLayerBtn', 'deleteLayerBtn', 'moveUpLayerBtn', 'moveDownLayerBtn', 'mergeDownBtn', 'renameLayerBtn', 'clearLayerBtn', 'addFolderBtn', 'deleteFolderBtn', 'moveToFolderSelect'];
             layerBtns.forEach(id => {
                 document.getElementById(id).disabled = true;
                 document.getElementById(id).style.opacity = '0.3';
