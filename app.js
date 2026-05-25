@@ -4029,6 +4029,17 @@ class DrawingApp {
         this.updateLayerPanel();
     }
 
+    setFolderChildrenSelectable(folderId, checked) {
+        for (const l of this.layers) {
+            if (l.parentId === folderId) {
+                l.selectable = checked;
+                if (l.type === 'folder') {
+                    this.setFolderChildrenSelectable(l.id, checked);
+                }
+            }
+        }
+    }
+
     moveSelectedToFolder(folderId) {
         if (!folderId) return;
         const selectableLayers = this.layers.filter(l => l.selectable && l.type === 'layer' && l.id !== folderId);
@@ -4320,6 +4331,9 @@ class DrawingApp {
                     }
                     this.activeLayerIndex = realIndex;
                     this.layers[realIndex].selectable = true;
+                    if (layer.type === 'folder') {
+                        this.setFolderChildrenSelectable(layer.id, true);
+                    }
                     this.updateLayerPanel();
                     const activeLayer = this.layers[this.activeLayerIndex];
                     document.getElementById('layerOpacity').value = activeLayer.type !== 'folder' ? Math.round(activeLayer.opacity * 100) : 100;
@@ -4334,7 +4348,7 @@ class DrawingApp {
             selCb.type = 'checkbox';
             selCb.className = 'layer-select-cb';
             if (layer.type === 'folder') {
-                selCb.checked = false;
+                selCb.checked = layer.selectable !== false;
                 selCb.disabled = false;
             } else {
                 selCb.checked = realIndex === this.activeLayerIndex ? true : (layer.selectable !== false);
@@ -4343,6 +4357,9 @@ class DrawingApp {
             selCb.addEventListener('change', (e) => {
                 e.stopPropagation();
                 layer.selectable = selCb.checked;
+                if (layer.type === 'folder') {
+                    this.setFolderChildrenSelectable(layer.id, selCb.checked);
+                }
                 this.updateLayerPanel();
             });
             layerItem.appendChild(selCb);
