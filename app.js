@@ -3969,6 +3969,11 @@ class DrawingApp {
         this.clearSelection();
         this.layerCounter++;
 
+        if (parentId === undefined) {
+            const active = this.layers[this.activeLayerIndex];
+            parentId = active && active.type !== 'folder' ? active.parentId : null;
+        }
+
         const layer = {
             id: this.layerCounter,
             type: 'layer',
@@ -4136,8 +4141,9 @@ class DrawingApp {
     }
 
     renameActiveLayer() {
-        const layerItems = document.querySelectorAll('.layer-item');
-        const targetItem = layerItems[this.activeLayerIndex];
+        const active = this.layers[this.activeLayerIndex];
+        if (!active) return;
+        const targetItem = document.querySelector(`.layer-item[data-layer-id="${active.id}"]`);
         if (!targetItem) return;
 
         const nameEl = targetItem.querySelector('.layer-name');
@@ -4308,6 +4314,7 @@ class DrawingApp {
             const realIndex = this.layers.indexOf(layer);
             const layerItem = document.createElement('div');
             layerItem.className = 'layer-item' + (realIndex === this.activeLayerIndex ? ' active' : '') + (layer.type === 'folder' ? ' layer-folder' : '');
+            layerItem.dataset.layerId = layer.id;
 
             let indentLevel = 0;
             let parent = layer.parentId;
