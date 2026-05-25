@@ -4540,6 +4540,12 @@ class DrawingApp {
             document.getElementById('layerOpacityValue').value = activeLayer.type !== 'folder' ? Math.round(activeLayer.opacity * 100) : 100;
             document.getElementById('layerBlendMode').value = activeLayer.type !== 'folder' ? activeLayer.blendMode : 'source-over';
         }
+
+        const isFolder = activeLayer?.type === 'folder';
+        ['mergeDownBtn', 'clearLayerBtn'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) { el.disabled = isFolder; el.style.opacity = isFolder ? '0.3' : '1'; }
+        });
     }
 
     getFolderChildCommands(folderId) {
@@ -6591,7 +6597,7 @@ ${svgContent}
         this.hoveredHandle = null;
         document.getElementById('pathEditBtn').classList.remove('active');
         document.getElementById('addPointBtn').classList.remove('active');
-        const layerBtns = ['addLayerBtn', 'deleteLayerBtn', 'moveUpLayerBtn', 'moveDownLayerBtn', 'mergeDownBtn', 'renameLayerBtn', 'clearLayerBtn'];
+        const layerBtns = ['addLayerBtn', 'deleteLayerBtn', 'moveUpLayerBtn', 'moveDownLayerBtn', 'mergeDownBtn', 'renameLayerBtn', 'clearLayerBtn', 'addFolderBtn', 'deleteFolderBtn', 'moveToFolderSelect'];
         layerBtns.forEach(id => {
             const el = document.getElementById(id);
             if (el) { el.disabled = false; el.style.opacity = '1'; }
