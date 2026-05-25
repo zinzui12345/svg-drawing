@@ -4490,6 +4490,13 @@ class DrawingApp {
             visBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 layer.visible = !layer.visible;
+                if (layer.type === 'folder') {
+                    const descIds = this.getBlockIds(layer.id).slice(1);
+                    for (const id of descIds) {
+                        const l = this.layers.find(l => l.id === id);
+                        if (l) l.visible = layer.visible;
+                    }
+                }
                 this.viewportRender();
                 this.updateLayerPanel();
             });
