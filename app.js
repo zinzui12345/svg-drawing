@@ -3714,7 +3714,6 @@ class DrawingApp {
         return merged;
     }
 
-    // FIXME : perlu testing untuk path dengan sudut dan lengkungan karena hasilnya tidak akurat
     strokeToOutline(points, halfWidth, closed) {
         const n = points.length;
         if (n < 2) return null;
@@ -3723,24 +3722,50 @@ class DrawingApp {
         const m = isClosed ? n - 1 : n;
         if (m < 2) return null;
         const left = [], right = [];
+        const MITER_LIMIT = 4;
         for (let i = 0; i < m; i++) {
-            let dx, dy;
+            const p = points[i];
             const prev = isClosed ? points[(i - 1 + m) % m] : (i > 0 ? points[i - 1] : null);
             const next = isClosed ? points[(i + 1) % m] : (i < m - 1 ? points[i + 1] : null);
-            if (!prev) { dx = next.x - points[i].x; dy = next.y - points[i].y; }
-            else if (!next) { dx = points[i].x - prev.x; dy = points[i].y - prev.y; }
-            else {
-                const ux1 = points[i].x - prev.x, uy1 = points[i].y - prev.y;
-                const ux2 = next.x - points[i].x, uy2 = next.y - points[i].y;
-                if (Math.hypot(ux1, uy1) < 0.001) { dx = ux2; dy = uy2; }
-                else if (Math.hypot(ux2, uy2) < 0.001) { dx = ux1; dy = uy1; }
-                else { dx = ux1 + ux2; dy = uy1 + uy2; }
+            let nx = 0, ny = 0;
+            if (prev && next) {
+                const dx1 = p.x - prev.x, dy1 = p.y - prev.y;
+                const dx2 = next.x - p.x, dy2 = next.y - p.y;
+                const len1 = Math.hypot(dx1, dy1), len2 = Math.hypot(dx2, dy2);
+                if (len1 < 0.001 && len2 < 0.001) { left.push({ ...p }); right.push({ ...p }); continue; }
+                if (len1 < 0.001) {
+                    nx = -dy2 / len2 * halfWidth; ny = dx2 / len2 * halfWidth;
+                } else if (len2 < 0.001) {
+                    nx = -dy1 / len1 * halfWidth; ny = dx1 / len1 * halfWidth;
+                } else {
+                    const n1x = -dy1 / len1, n1y = dx1 / len1;
+                    const n2x = -dy2 / len2, n2y = dx2 / len2;
+                    const dot = n1x * n2x + n1y * n2y;
+                    const denom = 1 + dot;
+                    if (denom < 0.001) {
+                        left.push({ ...p }); right.push({ ...p }); continue;
+                    }
+                    const scale = halfWidth / denom;
+                    const mx = (n1x + n2x) * scale, my = (n1y + n2y) * scale;
+                    const miterLen = Math.hypot(mx, my);
+                    if (miterLen > halfWidth * MITER_LIMIT) {
+                        const clampScale = halfWidth * MITER_LIMIT / miterLen;
+                        nx = mx * clampScale; ny = my * clampScale;
+                    } else {
+                        nx = mx; ny = my;
+                    }
+                }
+            } else if (prev) {
+                const dx = p.x - prev.x, dy = p.y - prev.y;
+                const len = Math.hypot(dx, dy);
+                if (len >= 0.001) { nx = -dy / len * halfWidth; ny = dx / len * halfWidth; }
+            } else if (next) {
+                const dx = next.x - p.x, dy = next.y - p.y;
+                const len = Math.hypot(dx, dy);
+                if (len >= 0.001) { nx = -dy / len * halfWidth; ny = dx / len * halfWidth; }
             }
-            const len = Math.hypot(dx, dy);
-            if (len < 0.001) { left.push(points[i]); right.push(points[i]); continue; }
-            const nx = -dy / len * halfWidth, ny = dx / len * halfWidth;
-            left.push({ x: points[i].x + nx, y: points[i].y + ny });
-            right.push({ x: points[i].x - nx, y: points[i].y - ny });
+            left.push({ x: p.x + nx, y: p.y + ny });
+            right.push({ x: p.x - nx, y: p.y - ny });
         }
         const outline = [right[0]];
         for (let i = 1; i < m; i++) outline.push(right[i]);
