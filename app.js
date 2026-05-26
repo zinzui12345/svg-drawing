@@ -2231,16 +2231,6 @@ class DrawingApp {
         return null;
     }
 
-    _findSegmentEraserIntersection(p1, p2, regions) {
-        for (const region of regions) {
-            for (let j = 0, k = region.length - 1; j < region.length; k = j++) {
-                const int = this._segmentIntersect(p1, p2, region[k], region[j]);
-                if (int) return int;
-            }
-        }
-        return null;
-    }
-
     _splitBezierAt(p1, p2, t) {
         const ax = p1.x, ay = p1.y;
         const bx = p1.cp2x !== undefined ? p1.cp2x : p1.x;
@@ -2270,6 +2260,7 @@ class DrawingApp {
 
         if (!isCurved) {
             const cutPoints = [{ x: pts[0].x, y: pts[0].y }];
+            let wasCut = false;
             for (let i = 0; i < pts.length - 1; i++) {
                 const p1 = pts[i], p2 = pts[i + 1];
                 const intersections = [];
@@ -2284,9 +2275,29 @@ class DrawingApp {
                         }
                     }
                 }
+                if (intersections.length > 0) wasCut = true;
                 intersections.sort((a, b) => a.t - b.t);
                 for (const int of intersections) cutPoints.push({ x: int.x, y: int.y });
                 cutPoints.push({ x: p2.x, y: p2.y });
+            }
+
+            if (cmd.closed) {
+                const p1 = pts[pts.length - 1], p2 = pts[0];
+                const intersections = [];
+                for (const region of eraserRegions) {
+                    for (let j = 0, k = region.length - 1; j < region.length; k = j++) {
+                        const int = this._segmentIntersect(p1, p2, region[k], region[j]);
+                        if (int) {
+                            const t = Math.hypot(int.x - p1.x, int.y - p1.y) / Math.hypot(p2.x - p1.x, p2.y - p1.y);
+                            if (t > 0.001 && t < 0.999) {
+                                intersections.push({ x: int.x, y: int.y, t });
+                            }
+                        }
+                    }
+                }
+                if (intersections.length > 0) wasCut = true;
+                intersections.sort((a, b) => a.t - b.t);
+                for (const int of intersections) cutPoints.push({ x: int.x, y: int.y });
             }
             const result = [];
             let currentGroup = [];
@@ -2294,27 +2305,44 @@ class DrawingApp {
                 const p1 = cutPoints[i], p2 = cutPoints[i + 1];
                 const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
                 const midInside = eraserRegions.some(r => this.isPointInPolygon(mx, my, r));
+                if (midInside) wasCut = true;
                 if (!midInside) {
                     if (currentGroup.length === 0) currentGroup.push({ ...p1 });
                     currentGroup.push({ ...p2 });
                 } else {
                     if (currentGroup.length >= 2) {
-                        result.push({ ...cmd, points: currentGroup });
+                        result.push({ ...cmd, closed: wasCut ? false : cmd.closed, points: currentGroup });
                     }
                     currentGroup = [];
                 }
             }
             if (currentGroup.length >= 2) {
-                result.push({ ...cmd, points: currentGroup });
+                result.push({ ...cmd, closed: wasCut ? false : cmd.closed, points: currentGroup });
+            }
+            if (cmd.closed && result.length >= 2) {
+                const first = result[0], last = result[result.length - 1];
+                if (first.points.length > 0 && last.points.length > 0 &&
+                    Math.hypot(first.points[0].x - pts[0].x, first.points[0].y - pts[0].y) < 0.1) {
+                    const lastPt = last.points[last.points.length - 1];
+                    const endsAtPn1 = Math.hypot(lastPt.x - pts[pts.length - 1].x, lastPt.y - pts[pts.length - 1].y) < 0.1;
+                    const endsAtP0 = Math.hypot(lastPt.x - pts[0].x, lastPt.y - pts[0].y) < 0.1;
+                    if (endsAtPn1 || endsAtP0) {
+                        if (endsAtP0) last.points.pop();
+                        last.points.push(...first.points);
+                        result.shift();
+                    }
+                }
             }
             return result.length > 0 ? result : null;
         }
 
         const segments = [];
-        for (let i = 0; i < pts.length - 1; i++) {
-            const p1 = pts[i], p2 = pts[i + 1];
+        const segCount = cmd.closed ? pts.length : pts.length - 1;
+        const steps = 32;
+        for (let i = 0; i < segCount; i++) {
+            const p1 = pts[i];
+            const p2 = cmd.closed ? pts[(i + 1) % pts.length] : pts[i + 1];
             const samples = [];
-            const steps = 32;
             for (let s = 0; s <= steps; s++) {
                 const t = s / steps;
                 const mt = 1 - t;
@@ -2336,6 +2364,7 @@ class DrawingApp {
 
         const result = [];
         let currentGroup = [];
+        let wasCut = false;
         for (let si = 0; si < segments.length; si++) {
             const seg = segments[si];
             const firstSample = seg.samples[0];
@@ -2348,6 +2377,7 @@ class DrawingApp {
                 if (prev.inside !== curr.inside) {
                     const tMid = (s - 0.5) / divs;
                     transitions.push({ t: tMid });
+                    wasCut = true;
                 }
             }
 
@@ -2355,8 +2385,9 @@ class DrawingApp {
                 if (currentGroup.length === 0) currentGroup.push({ ...seg.p1 });
                 currentGroup.push({ ...seg.p2 });
             } else if (firstSample.inside && lastSample.inside && transitions.length === 0) {
+                wasCut = true;
                 if (currentGroup.length >= 2) {
-                    result.push({ ...cmd, points: currentGroup });
+                    result.push({ ...cmd, closed: wasCut ? false : cmd.closed, points: currentGroup });
                 }
                 currentGroup = [];
             } else {
@@ -2367,18 +2398,19 @@ class DrawingApp {
                         currentGroup.push({ ...seg.p2 });
                     } else {
                         if (currentGroup.length >= 2) {
-                            result.push({ ...cmd, points: currentGroup });
+                            result.push({ ...cmd, closed: wasCut ? false : cmd.closed, points: currentGroup });
                         }
                         currentGroup = [];
                     }
                 } else {
                     let curP1 = { ...seg.p1 };
+                    let curP2 = { ...seg.p2 };
                     let lastSplit = null;
                     let running = 0;
                     for (const st of splitTs) {
                         const adj = (st - running) / (1 - running);
                         running = st;
-                        lastSplit = this._splitBezierAt(curP1, seg.p2, adj);
+                        lastSplit = this._splitBezierAt(curP1, curP2, adj);
                         if (currentGroup.length > 0) {
                             currentGroup[currentGroup.length - 1].cp2x = lastSplit.left.cp1x;
                             currentGroup[currentGroup.length - 1].cp2y = lastSplit.left.cp1y;
@@ -2400,13 +2432,14 @@ class DrawingApp {
                             currentGroup.push(splitPt);
                         } else {
                             if (currentGroup.length >= 2) {
-                                result.push({ ...cmd, points: currentGroup });
+                                result.push({ ...cmd, closed: wasCut ? false : cmd.closed, points: currentGroup });
                             }
                             currentGroup = [];
                         }
                         curP1 = splitPt;
+                        curP2 = { ...seg.p2, cp1x: lastSplit.right.cp2x, cp1y: lastSplit.right.cp2y };
                     }
-                    const lastMidX = (curP1.x + seg.p2.x) / 2, lastMidY = (curP1.y + seg.p2.y) / 2;
+                    const lastMidX = (curP1.x + curP2.x) / 2, lastMidY = (curP1.y + curP2.y) / 2;
                     const lastMidInside = eraserRegions.some(r => this.isPointInPolygon(lastMidX, lastMidY, r));
                     if (!lastMidInside) {
                         if (currentGroup.length === 0) {
@@ -2417,15 +2450,10 @@ class DrawingApp {
                             }
                             currentGroup.push(startPt);
                         }
-                        const endPt = { ...seg.p2 };
-                        if (lastSplit) {
-                            endPt.cp1x = lastSplit.right.cp2x;
-                            endPt.cp1y = lastSplit.right.cp2y;
-                        }
-                        currentGroup.push(endPt);
+                        currentGroup.push(curP2);
                     } else {
                         if (currentGroup.length >= 2) {
-                            result.push({ ...cmd, points: currentGroup });
+                            result.push({ ...cmd, closed: wasCut ? false : cmd.closed, points: currentGroup });
                         }
                         currentGroup = [];
                     }
@@ -2434,7 +2462,22 @@ class DrawingApp {
         }
 
         if (currentGroup.length >= 2) {
-            result.push({ ...cmd, points: currentGroup });
+            result.push({ ...cmd, closed: wasCut ? false : cmd.closed, points: currentGroup });
+        }
+
+        if (cmd.closed && result.length >= 2) {
+            const first = result[0], last = result[result.length - 1];
+            if (first.points.length > 0 && last.points.length > 0 &&
+                Math.hypot(first.points[0].x - pts[0].x, first.points[0].y - pts[0].y) < 0.1) {
+                const lastPt = last.points[last.points.length - 1];
+                const endsAtPn1 = Math.hypot(lastPt.x - pts[pts.length - 1].x, lastPt.y - pts[pts.length - 1].y) < 0.1;
+                const endsAtP0 = Math.hypot(lastPt.x - pts[0].x, lastPt.y - pts[0].y) < 0.1;
+                if (endsAtPn1 || endsAtP0) {
+                    if (endsAtP0) last.points.pop();
+                    last.points.push(...first.points);
+                    result.shift();
+                }
+            }
         }
 
         return result.length > 0 ? result : null;
