@@ -809,27 +809,60 @@ class DrawingApp {
             }
         }
 
-        if (this.currentTool === 'pen' && this.penExtendTarget && !this.isPenActive) {
+        if (this.currentTool === 'pen' && this.penExtendTarget) {
             const hs = this.getHandleScale();
+            const pointR = (6 + 6 * hs.t) * hs.scale;
             const handleR = (8 + 8 * hs.t) * hs.scale;
             const borderW = (2.5 + 2.5 * hs.t) * hs.scale;
             const pts = this.penExtendTarget.points;
-            for (const which of ['start', 'end']) {
-                const p = which === 'start' ? pts[0] : pts[pts.length - 1];
-                const isHover = this.penExtendWhich === which;
-                ctx.fillStyle = isHover ? '#4a9eff' : '#fff';
-                ctx.strokeStyle = '#4a9eff';
-                ctx.lineWidth = borderW;
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, isHover ? handleR * 1.4 : handleR, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-                if (isHover) {
-                    ctx.fillStyle = '#fff';
-                    ctx.font = `bold ${Math.round(handleR * 1.2)}px sans-serif`;
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-                    ctx.fillText('+', p.x, p.y);
+            if (this.isExtending) {
+                for (let i = 0; i < pts.length; i++) {
+                    const isStart = i === 0, isEnd = i === pts.length - 1;
+                    if (isStart || isEnd) {
+                        const which = isStart ? 'start' : 'end';
+                        const isHover = this.penExtendWhich === which;
+                        ctx.fillStyle = isHover ? '#4a9eff' : '#fff';
+                        ctx.strokeStyle = '#4a9eff';
+                        ctx.lineWidth = borderW;
+                        ctx.beginPath();
+                        ctx.arc(pts[i].x, pts[i].y, isHover ? handleR * 1.4 : handleR, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.stroke();
+                        if (isHover) {
+                            ctx.fillStyle = '#fff';
+                            ctx.font = `bold ${Math.round(handleR * 1.2)}px sans-serif`;
+                            ctx.textAlign = 'center';
+                            ctx.textBaseline = 'middle';
+                            ctx.fillText('+', pts[i].x, pts[i].y);
+                        }
+                    } else {
+                        ctx.fillStyle = '#fff';
+                        ctx.strokeStyle = '#4a9eff';
+                        ctx.lineWidth = borderW;
+                        ctx.beginPath();
+                        ctx.arc(pts[i].x, pts[i].y, pointR, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.stroke();
+                    }
+                }
+            } else {
+                for (const which of ['start', 'end']) {
+                    const p = which === 'start' ? pts[0] : pts[pts.length - 1];
+                    const isHover = this.penExtendWhich === which;
+                    ctx.fillStyle = isHover ? '#4a9eff' : '#fff';
+                    ctx.strokeStyle = '#4a9eff';
+                    ctx.lineWidth = borderW;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, isHover ? handleR * 1.4 : handleR, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                    if (isHover) {
+                        ctx.fillStyle = '#fff';
+                        ctx.font = `bold ${Math.round(handleR * 1.2)}px sans-serif`;
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText('+', p.x, p.y);
+                    }
                 }
             }
         }
@@ -1201,11 +1234,6 @@ class DrawingApp {
                 this.saveState();
                 this.isExtending = true;
                 this.isPenActive = true;
-                if (this.penExtendWhich === 'end') {
-                    this.penExtendTarget.points.push({ x: coords.x, y: coords.y });
-                } else {
-                    this.penExtendTarget.points.unshift({ x: coords.x, y: coords.y });
-                }
                 this.viewportRender();
                 return;
             }
