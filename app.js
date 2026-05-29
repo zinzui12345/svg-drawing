@@ -581,10 +581,24 @@ class DrawingApp {
                         dx2 = (next.x - point.x) / len * 20;
                         dy2 = (next.y - point.y) / len * 20;
                     }
-                    if (idx === 0 && idx < points.length - 1) {
-                        dx1 = -dx2; dy1 = -dy2;
-                    } else if (idx === points.length - 1 && idx > 0) {
-                        dx2 = -dx1; dy2 = -dy1;
+                    if (idx === 0) {
+                        if (this.editingPathCmd.closed) {
+                            const prev = points[points.length - 1];
+                            const len = Math.hypot(point.x - prev.x, point.y - prev.y) || 1;
+                            dx1 = -(point.x - prev.x) / len * 20;
+                            dy1 = -(point.y - prev.y) / len * 20;
+                        } else if (idx < points.length - 1) {
+                            dx1 = -dx2; dy1 = -dy2;
+                        }
+                    } else if (idx === points.length - 1) {
+                        if (this.editingPathCmd.closed) {
+                            const next = points[0];
+                            const len = Math.hypot(next.x - point.x, next.y - point.y) || 1;
+                            dx2 = (next.x - point.x) / len * 20;
+                            dy2 = (next.y - point.y) / len * 20;
+                        } else if (idx > 0) {
+                            dx2 = -dx1; dy2 = -dy1;
+                        }
                     }
                     point.cp1x = point.x + dx1; point.cp1y = point.y + dy1;
                     point.cp2x = point.x + dx2; point.cp2y = point.y + dy2;
@@ -607,8 +621,27 @@ class DrawingApp {
                     point.cp2x = point.x - nx * avg; point.cp2y = point.y - ny * avg;
                 } else {
                     let dx = -20, dy = 0;
+                    const closed = this.editingPathCmd.closed;
                     if (idx > 0 && idx < points.length - 1) {
                         const prev = points[idx - 1], next = points[idx + 1];
+                        const v1x = point.x - prev.x, v1y = point.y - prev.y;
+                        const v2x = next.x - point.x, v2y = next.y - point.y;
+                        const l1 = Math.hypot(v1x, v1y) || 1;
+                        const l2 = Math.hypot(v2x, v2y) || 1;
+                        const nx = v1x / l1 + v2x / l2, ny = v1y / l1 + v2y / l2;
+                        const len = Math.hypot(nx, ny) || 1;
+                        dx = nx / len * 20; dy = ny / len * 20;
+                    } else if (closed && idx === 0) {
+                        const prev = points[points.length - 1], next = points[1];
+                        const v1x = point.x - prev.x, v1y = point.y - prev.y;
+                        const v2x = next.x - point.x, v2y = next.y - point.y;
+                        const l1 = Math.hypot(v1x, v1y) || 1;
+                        const l2 = Math.hypot(v2x, v2y) || 1;
+                        const nx = v1x / l1 + v2x / l2, ny = v1y / l1 + v2y / l2;
+                        const len = Math.hypot(nx, ny) || 1;
+                        dx = nx / len * 20; dy = ny / len * 20;
+                    } else if (closed && idx === points.length - 1) {
+                        const prev = points[points.length - 2], next = points[0];
                         const v1x = point.x - prev.x, v1y = point.y - prev.y;
                         const v2x = next.x - point.x, v2y = next.y - point.y;
                         const l1 = Math.hypot(v1x, v1y) || 1;
@@ -633,15 +666,29 @@ class DrawingApp {
             }
 
             if (type !== 'corner') {
+                const closed = this.editingPathCmd.closed;
+                const len = points.length;
                 if (idx > 0 && points[idx - 1].cp2x === undefined) {
                     const prev = points[idx - 1];
                     prev.cp2x = prev.x + (point.x - prev.x) / 3;
                     prev.cp2y = prev.y + (point.y - prev.y) / 3;
                 }
-                if (idx < points.length - 1 && points[idx + 1].cp1x === undefined) {
+                if (idx < len - 1 && points[idx + 1].cp1x === undefined) {
                     const next = points[idx + 1];
                     next.cp1x = next.x + (point.x - next.x) / 3;
                     next.cp1y = next.y + (point.y - next.y) / 3;
+                }
+                if (closed) {
+                    if (idx === 0 && points[len - 1].cp2x === undefined) {
+                        const prev = points[len - 1];
+                        prev.cp2x = prev.x + (point.x - prev.x) / 3;
+                        prev.cp2y = prev.y + (point.y - prev.y) / 3;
+                    }
+                    if (idx === len - 1 && points[0].cp1x === undefined) {
+                        const next = points[0];
+                        next.cp1x = next.x + (point.x - next.x) / 3;
+                        next.cp1y = next.y + (point.y - next.y) / 3;
+                    }
                 }
             }
 
