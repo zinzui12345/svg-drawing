@@ -32,6 +32,9 @@ class DrawingApp {
 
         this.penPoints = [];
         this.isPenActive = false;
+        this.isExtending = false;
+        this.penExtendTarget = null;
+        this.penExtendWhich = null;
 
         this.isDrawing = false;
         this.lastX = 0;
@@ -195,7 +198,18 @@ class DrawingApp {
         this.viewportCanvas.addEventListener('contextmenu', (e) => {
             e.preventDefault();
             if (this.currentTool === 'pen' && this.isPenActive) {
-                if (this.penPoints.length > 1) {
+                if (this.isExtending && this.penExtendTarget) {
+                    const pts = this.penExtendTarget.points;
+                    if (this.penExtendWhich === 'end') {
+                        pts.pop();
+                    } else {
+                        pts.shift();
+                    }
+                    if (pts.length < 2) {
+                        this.cancelPen();
+                    }
+                    this.viewportRender();
+                } else if (this.penPoints.length > 1) {
                     this.penPoints.pop();
                     this.viewportRender();
                 } else {
@@ -543,7 +557,7 @@ class DrawingApp {
                         delete points[idx + 1].cp2y;
                     }
                 }
-            } else if (type === 'smooth') {
+                } else if (type === 'smooth') {
                 if (point.cp1x === undefined && point.cp2x !== undefined) {
                     point.cp1x = 2 * point.x - point.cp2x;
                     point.cp1y = 2 * point.y - point.cp2y;
@@ -554,8 +568,26 @@ class DrawingApp {
                     const dx = point.cp1x - point.x, dy = point.cp1y - point.y;
                     point.cp2x = point.x - dx; point.cp2y = point.y - dy;
                 } else {
-                    point.cp1x = point.x - 20; point.cp1y = point.y;
-                    point.cp2x = point.x + 20; point.cp2y = point.y;
+                    let dx1 = -20, dy1 = 0, dx2 = 20, dy2 = 0;
+                    if (idx > 0) {
+                        const prev = points[idx - 1];
+                        const len = Math.hypot(point.x - prev.x, point.y - prev.y) || 1;
+                        dx1 = -(point.x - prev.x) / len * 20;
+                        dy1 = -(point.y - prev.y) / len * 20;
+                    }
+                    if (idx < points.length - 1) {
+                        const next = points[idx + 1];
+                        const len = Math.hypot(next.x - point.x, next.y - point.y) || 1;
+                        dx2 = (next.x - point.x) / len * 20;
+                        dy2 = (next.y - point.y) / len * 20;
+                    }
+                    if (idx === 0 && idx < points.length - 1) {
+                        dx1 = -dx2; dy1 = -dy2;
+                    } else if (idx === points.length - 1 && idx > 0) {
+                        dx2 = -dx1; dy2 = -dy1;
+                    }
+                    point.cp1x = point.x + dx1; point.cp1y = point.y + dy1;
+                    point.cp2x = point.x + dx2; point.cp2y = point.y + dy2;
                 }
             } else if (type === 'symmetric') {
                 if (point.cp1x === undefined && point.cp2x !== undefined) {
@@ -574,8 +606,29 @@ class DrawingApp {
                     point.cp1x = point.x + nx * avg; point.cp1y = point.y + ny * avg;
                     point.cp2x = point.x - nx * avg; point.cp2y = point.y - ny * avg;
                 } else {
-                    point.cp1x = point.x - 20; point.cp1y = point.y;
-                    point.cp2x = point.x + 20; point.cp2y = point.y;
+                    let dx = -20, dy = 0;
+                    if (idx > 0 && idx < points.length - 1) {
+                        const prev = points[idx - 1], next = points[idx + 1];
+                        const v1x = point.x - prev.x, v1y = point.y - prev.y;
+                        const v2x = next.x - point.x, v2y = next.y - point.y;
+                        const l1 = Math.hypot(v1x, v1y) || 1;
+                        const l2 = Math.hypot(v2x, v2y) || 1;
+                        const nx = v1x / l1 + v2x / l2, ny = v1y / l1 + v2y / l2;
+                        const len = Math.hypot(nx, ny) || 1;
+                        dx = nx / len * 20; dy = ny / len * 20;
+                    } else if (idx > 0) {
+                        const prev = points[idx - 1];
+                        const len = Math.hypot(point.x - prev.x, point.y - prev.y) || 1;
+                        dx = (point.x - prev.x) / len * 20;
+                        dy = (point.y - prev.y) / len * 20;
+                    } else if (idx < points.length - 1) {
+                        const next = points[idx + 1];
+                        const len = Math.hypot(next.x - point.x, next.y - point.y) || 1;
+                        dx = (next.x - point.x) / len * 20;
+                        dy = (next.y - point.y) / len * 20;
+                    }
+                    point.cp1x = point.x - dx; point.cp1y = point.y - dy;
+                    point.cp2x = point.x + dx; point.cp2y = point.y + dy;
                 }
             }
 
@@ -737,7 +790,7 @@ class DrawingApp {
             ctx.lineWidth = this.brushSize;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
-            if (this.penPoints.length >= 2) {
+            if (this.penPoints.length >= 2 && !this.isExtending) {
                 ctx.beginPath();
                 ctx.moveTo(this.penPoints[0].x, this.penPoints[0].y);
                 for (let i = 1; i < this.penPoints.length; i++) {
@@ -756,6 +809,31 @@ class DrawingApp {
             }
         }
 
+        if (this.currentTool === 'pen' && this.penExtendTarget && !this.isPenActive) {
+            const hs = this.getHandleScale();
+            const handleR = (8 + 8 * hs.t) * hs.scale;
+            const borderW = (2.5 + 2.5 * hs.t) * hs.scale;
+            const pts = this.penExtendTarget.points;
+            for (const which of ['start', 'end']) {
+                const p = which === 'start' ? pts[0] : pts[pts.length - 1];
+                const isHover = this.penExtendWhich === which;
+                ctx.fillStyle = isHover ? '#4a9eff' : '#fff';
+                ctx.strokeStyle = '#4a9eff';
+                ctx.lineWidth = borderW;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, isHover ? handleR * 1.4 : handleR, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+                if (isHover) {
+                    ctx.fillStyle = '#fff';
+                    ctx.font = `bold ${Math.round(handleR * 1.2)}px sans-serif`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('+', p.x, p.y);
+                }
+            }
+        }
+
         if (!this.mouseOnCanvas) return;
 
         if (this.currentTool === 'pen' && this.isPenActive && this.penPoints.length > 0) {
@@ -768,6 +846,25 @@ class DrawingApp {
             ctx.setLineDash([dashLen, dashLen]);
             ctx.beginPath();
             ctx.moveTo(last.x, last.y);
+            ctx.lineTo(this.mouseX, this.mouseY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        if (this.currentTool === 'pen' && this.isExtending && this.penExtendTarget) {
+            const pts = this.penExtendTarget.points;
+            const hs = this.getHandleScale();
+            const dashLen = (4 + 4 * hs.t) * hs.scale;
+            const previewWidth = (2.5 + 2.5 * hs.t) * hs.scale;
+            ctx.strokeStyle = '#888';
+            ctx.lineWidth = previewWidth;
+            ctx.setLineDash([dashLen, dashLen]);
+            ctx.beginPath();
+            if (this.penExtendWhich === 'start') {
+                ctx.moveTo(pts[0].x, pts[0].y);
+            } else {
+                ctx.moveTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+            }
             ctx.lineTo(this.mouseX, this.mouseY);
             ctx.stroke();
             ctx.setLineDash([]);
@@ -1100,11 +1197,31 @@ class DrawingApp {
 
     handlePenMouseDown(coords) {
         if (!this.isPenActive) {
+            if (this.penExtendTarget && this.penExtendWhich) {
+                this.saveState();
+                this.isExtending = true;
+                this.isPenActive = true;
+                if (this.penExtendWhich === 'end') {
+                    this.penExtendTarget.points.push({ x: coords.x, y: coords.y });
+                } else {
+                    this.penExtendTarget.points.unshift({ x: coords.x, y: coords.y });
+                }
+                this.viewportRender();
+                return;
+            }
+            this.penExtendTarget = null;
+            this.penExtendWhich = null;
             this.clearSelection();
             this.showPathEditControls(false);
             this.saveState();
             this.penPoints = [{ x: coords.x, y: coords.y }];
             this.isPenActive = true;
+        } else if (this.isExtending && this.penExtendTarget) {
+            if (this.penExtendWhich === 'end') {
+                this.penExtendTarget.points.push({ x: coords.x, y: coords.y });
+            } else {
+                this.penExtendTarget.points.unshift({ x: coords.x, y: coords.y });
+            }
         } else {
             this.penPoints.push({ x: coords.x, y: coords.y });
         }
@@ -1112,6 +1229,14 @@ class DrawingApp {
     }
 
     finalizePen() {
+        if (this.isExtending) {
+            this.penExtendTarget = null;
+            this.penExtendWhich = null;
+            this.isExtending = false;
+            this.isPenActive = false;
+            this.viewportRender();
+            return;
+        }
         if (!this.isPenActive || this.penPoints.length < 2) {
             this.cancelPen();
             return;
@@ -1139,6 +1264,9 @@ class DrawingApp {
     cancelPen() {
         this.penPoints = [];
         this.isPenActive = false;
+        this.isExtending = false;
+        this.penExtendTarget = null;
+        this.penExtendWhich = null;
         this.viewportRender();
     }
 
@@ -1748,6 +1876,25 @@ class DrawingApp {
             return;
         }
 
+        if (this.currentTool === 'pen' && this.penExtendTarget && !this.isPenActive) {
+            const pts = this.penExtendTarget.points;
+            const distStart = this.dist(coords.x, coords.y, pts[0].x, pts[0].y);
+            const distEnd = this.dist(coords.x, coords.y, pts[pts.length - 1].x, pts[pts.length - 1].y);
+            const threshold = 12 / this.zoom;
+            const prevWhich = this.penExtendWhich;
+            if (distStart <= threshold) {
+                this.penExtendWhich = 'start';
+            } else if (distEnd <= threshold) {
+                this.penExtendWhich = 'end';
+            } else {
+                this.penExtendWhich = null;
+            }
+            if (this.penExtendWhich !== prevWhich) {
+                this.viewportRender();
+            }
+            this.viewportCanvas.style.cursor = this.penExtendWhich ? 'copy' : 'crosshair';
+        }
+
         if (!this.isDrawing) {
             this.viewportRender();
             return;
@@ -2107,6 +2254,17 @@ class DrawingApp {
     setTool(tool) {
         if (this.currentTool !== tool && this.currentTool === 'pen' && this.isPenActive) {
             this.finalizePen();
+        }
+        if (tool === 'pen') {
+            if (this.selectedCommands.length === 1 && this.selectedCommands[0].type === 'brush') {
+                this.penExtendTarget = this.selectedCommands[0];
+            } else {
+                this.penExtendTarget = null;
+            }
+        } else {
+            this.penExtendTarget = null;
+            this.isExtending = false;
+            this.penExtendWhich = null;
         }
         this.currentTool = tool;
         document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
@@ -3404,6 +3562,14 @@ class DrawingApp {
     }
 
 
+    // FIXME : optimasi dengan langkah-langkah
+    /*
+        Langkah 1 : Fill area
+        gunakan fast path untuk objek brush stroke closed atau union objek pembatas luar
+
+        Langkah 2 : intersect fill
+        lakukan operasi boolean pada objek fill yang dihasilkan dari langkah 1 jika ada objek yang berada dalam objek pembatas luar (hasInner)
+    */
     async performFloodFill(x, y) {
         console.log('performFloodFill', x, y);
         if (x < 0 || x >= this.canvasWidth || y < 0 || y >= this.canvasHeight) return;
@@ -3757,6 +3923,7 @@ class DrawingApp {
         return merged;
     }
 
+    // FIXME : tambah jumlah sample untuk memperhalus hasil; fix sudut aneh disetiap point path
     strokeToOutline(points, halfWidth, closed) {
         const n = points.length;
         if (n < 2) return null;
