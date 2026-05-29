@@ -7,7 +7,6 @@ A lightweight, browser-based vector drawing application with layer support, laye
 ### Drawing Tools
 - **Brush (B)** — Freehand drawing with adjustable size and opacity. Automatically converts strokes into optimized bezier curves (RDP simplification + Catmull-Rom handle fitting) for fewer points and smoother results.
 - **Pen (P)** — Click to place points one by one, creating a manual path. Finalize with Enter, double-click, or tool switch. Right-click removes the last point (or cancels if only one point). Paths are NOT curve-fitted on completion — all points remain Corner type for precise control.
-- **Line (L)** — Straight line tool.
 - **Rectangle (R)** — Draw rectangles with stroke.
 - **Circle (C)** — Draw ellipses and circles.
 - **Fill (F)** — Flood fill tool that creates closed paths with fill color. Automatically expands boundaries to avoid gaps with stroked objects.
@@ -92,7 +91,6 @@ The sidebar panel is organized into sections:
 | **B**                     | Brush tool                    |
 | **P**                     | Pen tool                      |
 | **V**                     | Select tool                   |
-| **L**                     | Line tool                     |
 | **R**                     | Rectangle tool                |
 | **C**                     | Circle tool                   |
 | **F**                     | Fill tool                     |

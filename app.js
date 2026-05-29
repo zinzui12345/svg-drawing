@@ -1025,7 +1025,7 @@ class DrawingApp {
             ctx.globalAlpha = 1;
         }
 
-        if (this.shapeStart && ['line', 'rect', 'circle'].includes(this.currentTool)) {
+        if (this.shapeStart && ['rect', 'circle'].includes(this.currentTool)) {
             this.drawShape(ctx, this.shapeStart.x, this.shapeStart.y, this.mouseX, this.mouseY);
         }
 
@@ -1189,7 +1189,7 @@ class DrawingApp {
         const activeLayer = this.layers[this.activeLayerIndex];
         activeLayer.vectorCommands = activeLayer.vectorCommands || [];
 
-        if (this.currentTool === 'line' || this.currentTool === 'rect' || this.currentTool === 'circle') {
+        if (this.currentTool === 'rect' || this.currentTool === 'circle') {
             this.shapeStart = { x: coords.x, y: coords.y };
             this._constrainShape = e.ctrlKey || e.metaKey;
         } else if (this.currentTool === 'brush') {
@@ -1872,7 +1872,7 @@ class DrawingApp {
         const coords = this.getCanvasCoordinates(e);
         this.mouseX = coords.x;
         this.mouseY = coords.y;
-        if (this.isDrawing && ['line', 'rect', 'circle'].includes(this.currentTool)) {
+        if (this.isDrawing && ['rect', 'circle'].includes(this.currentTool)) {
             this._constrainShape = e.ctrlKey || e.metaKey;
         }
 
@@ -1955,7 +1955,7 @@ class DrawingApp {
             this.lastX = coords.x;
             this.lastY = coords.y;
             this.viewportRender();
-        } else if (this.currentTool === 'line' || this.currentTool === 'rect' || this.currentTool === 'circle') {
+            } else if (this.currentTool === 'rect' || this.currentTool === 'circle') {
             this.viewportRender();
         }
     }
@@ -1988,16 +1988,12 @@ class DrawingApp {
 
         const activeLayer = this.layers[this.activeLayerIndex];
 
-        if (this.currentTool === 'line' || this.currentTool === 'rect' || this.currentTool === 'circle') {
+        if (this.currentTool === 'rect' || this.currentTool === 'circle') {
             const coords = this.getCanvasCoordinates(e);
             this.saveState();
 
             let cmd;
-            if (this.currentTool === 'line') {
-                cmd = { type: 'line', color: this.brushColor, size: this.brushSize, opacity: this.brushOpacity,
-                    x1: this.shapeStart.x, y1: this.shapeStart.y, x2: coords.x, y2: coords.y,
-                    lineCap: this.brushLineCap, lineJoin: this.brushLineJoin };
-            } else if (this.currentTool === 'rect') {
+            if (this.currentTool === 'rect') {
                 let rx1 = this.shapeStart.x;
                 let ry1 = this.shapeStart.y;
                 let rx2 = coords.x;
@@ -2197,12 +2193,7 @@ class DrawingApp {
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
 
-        if (this.currentTool === 'line') {
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.stroke();
-        } else if (this.currentTool === 'rect') {
+        if (this.currentTool === 'rect') {
             let width = x2 - x1;
             let height = y2 - y1;
             if (this._constrainShape) {
@@ -2304,7 +2295,7 @@ class DrawingApp {
         }
         const sizeGroup = document.getElementById('sizeToolGroup');
         if (sizeGroup) {
-            const showSize = ['brush', 'line', 'rect', 'circle', 'pen', 'eraser'].includes(tool);
+            const showSize = ['brush', 'rect', 'circle', 'pen', 'eraser'].includes(tool);
             sizeGroup.style.display = showSize ? 'block' : 'none';
         }
         const expandGroup = document.getElementById('expandToolGroup');
@@ -5962,11 +5953,12 @@ ${svgContent}
                 const x2 = (parseFloat(el.getAttribute('x2') || '0') - vbX) * scaleX;
                 const y2 = (parseFloat(el.getAttribute('y2') || '0') - vbY) * scaleY;
                 commands.push({
-                    type: 'line',
+                    type: 'brush',
                     color: stroke || '#000000',
                     size: strokeWidth * (scaleX + scaleY) / 2,
                     opacity,
-                    x1, y1, x2, y2,
+                    points: [{x: x1, y: y1}, {x: x2, y: y2}],
+                    closed: false,
                     lineCap, lineJoin
                 });
             } else if (tag === 'path') {
@@ -6930,11 +6922,10 @@ ${svgContent}
                 }
                 break;
             case 'b':
-            case 'l':
             case 'r':
             case 'c':
                 if (!this.pathEditMode) {
-                    this.setTool(e.key.toLowerCase() === 'b' ? 'brush' : e.key.toLowerCase() === 'l' ? 'line' : e.key.toLowerCase() === 'r' ? 'rect' : 'circle');
+                    this.setTool(e.key.toLowerCase() === 'b' ? 'brush' : e.key.toLowerCase() === 'r' ? 'rect' : 'circle');
                 }
                 break;
             case 'v':
@@ -7007,7 +6998,6 @@ ${svgContent}
             });
             document.getElementById('toolBrush').style.display = 'none';
             document.getElementById('toolPen').style.display = 'none';
-            document.getElementById('toolLine').style.display = 'none';
             document.getElementById('toolRect').style.display = 'none';
             document.getElementById('toolCircle').style.display = 'none';
             document.getElementById('toolFill').style.display = 'none';
@@ -7095,7 +7085,6 @@ ${svgContent}
         });
         document.getElementById('toolBrush').style.display = 'flex';
         document.getElementById('toolPen').style.display = 'flex';
-        document.getElementById('toolLine').style.display = 'flex';
         document.getElementById('toolRect').style.display = 'flex';
         document.getElementById('toolCircle').style.display = 'flex';
         document.getElementById('toolFill').style.display = 'flex';
