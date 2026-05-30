@@ -2083,19 +2083,23 @@ class DrawingApp {
             }
             this.currentStar = null;
         } else if (this.currentStroke && this.currentStroke.type !== 'eraser' && this.currentStroke.points.length > 0) {
-            this.currentStroke.points = this.simplifyCollinearPoints(this.currentStroke.points);
-            if (this.currentStroke.points.length > 2) {
-                this.currentStroke.points = this.fitBrushCurve(this.currentStroke.points);
-            }
-            if (this.currentStroke.points.length === 1) {
-                const p = this.currentStroke.points[0];
-                activeLayer.vectorCommands.push(
-                    this.brushShape === 'star'
-                        ? this.makeStarFill(p.x, p.y, this.brushSize)
-                        : this.makeSinglePointFill(p.x, p.y, this.brushSize)
-                );
+            if (this.currentStroke.points.length >= 2 && this.tryMergeStroke(this.currentStroke, activeLayer)) {
+                // merged into existing stroke, skip further processing
             } else {
-                activeLayer.vectorCommands.push(this.currentStroke);
+                this.currentStroke.points = this.simplifyCollinearPoints(this.currentStroke.points);
+                if (this.currentStroke.points.length > 2) {
+                    this.currentStroke.points = this.fitBrushCurve(this.currentStroke.points);
+                }
+                if (this.currentStroke.points.length === 1) {
+                    const p = this.currentStroke.points[0];
+                    activeLayer.vectorCommands.push(
+                        this.brushShape === 'star'
+                            ? this.makeStarFill(p.x, p.y, this.brushSize)
+                            : this.makeSinglePointFill(p.x, p.y, this.brushSize)
+                    );
+                } else {
+                    activeLayer.vectorCommands.push(this.currentStroke);
+                }
             }
         }
 
@@ -2145,7 +2149,9 @@ class DrawingApp {
                 this.currentStar = null;
             } else if (this.currentStroke && this.currentStroke.type !== 'eraser' && this.currentStroke.points.length > 0) {
                 this.saveState();
-                if (this.currentStroke.points.length === 1) {
+                if (this.currentStroke.points.length >= 2 && this.tryMergeStroke(this.currentStroke, activeLayer)) {
+                    // merged into existing stroke
+                } else if (this.currentStroke.points.length === 1) {
                     const p = this.currentStroke.points[0];
                     activeLayer.vectorCommands.push(
                         this.brushShape === 'star'
@@ -4426,6 +4432,55 @@ class DrawingApp {
         return Math.acos(cosA) * 180 / Math.PI;
     }
 
+    tryMergeStroke(newStroke, layer) {
+        const threshold = newStroke.size * 0.5;
+        const newPts = newStroke.points;
+        if (newPts.length < 2) return false;
+        const newFirst = newPts[0];
+        const newLast = newPts[newPts.length - 1];
+
+        for (const cmd of layer.vectorCommands) {
+            if (cmd.type !== 'brush' || cmd === newStroke || !cmd.points || cmd.points.length < 2) continue;
+            if (cmd.color !== newStroke.color || cmd.size !== newStroke.size) continue;
+            if (cmd.closed) continue;
+
+            const oldPts = cmd.points;
+            const first = oldPts[0];
+            const last = oldPts[oldPts.length - 1];
+
+            let mergedPts = null;
+
+            if (this.dist(newLast.x, newLast.y, first.x, first.y) <= threshold) {
+                mergedPts = newPts.concat(oldPts.slice(1));
+            } else if (this.dist(newFirst.x, newFirst.y, last.x, last.y) <= threshold) {
+                mergedPts = oldPts.concat(newPts.slice(1));
+            } else if (this.dist(newFirst.x, newFirst.y, first.x, first.y) <= threshold) {
+                const rev = newPts.slice().reverse();
+                mergedPts = rev.slice(0, -1).concat(oldPts);
+            } else if (this.dist(newLast.x, newLast.y, last.x, last.y) <= threshold) {
+                const rev = newPts.slice().reverse();
+                mergedPts = oldPts.concat(rev.slice(1));
+            }
+
+            if (mergedPts) {
+                this.saveState();
+                const idx = layer.vectorCommands.indexOf(cmd);
+                if (idx >= 0) layer.vectorCommands.splice(idx, 1);
+
+                cmd.points = this.simplifyCollinearPoints(mergedPts);
+                if (cmd.points.length > 2) {
+                    cmd.points = this.fitBrushCurve(cmd.points);
+                }
+
+                if (cmd.points.length >= 2) {
+                    layer.vectorCommands.push(cmd);
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
     simplifyCollinearPoints(points) {
         if (points.length < 3) return points;
         const result = [points[0]];
@@ -5235,7 +5290,7 @@ class DrawingApp {
                                     d += ` L ${curr.x.toFixed(2)} ${curr.y.toFixed(2)}`;
                                 }
                             }
-                            if (cmd.closed || (cmd.points.length > 2 && Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= cmd.size * 2)) {
+                if (cmd.closed || (cmd.points.length > 2 && Math.hypot(cmd.points[0].x - cmd.points[cmd.points.length - 1].x, cmd.points[0].y - cmd.points[cmd.points.length - 1].y) <= cmd.size * 2)) {
                                 const last = cmd.points[cmd.points.length - 1];
                                 const first = cmd.points[0];
                                 if (last.cp2x !== undefined && first.cp1x !== undefined) {

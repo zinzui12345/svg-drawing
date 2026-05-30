@@ -5,7 +5,7 @@ A lightweight, browser-based vector drawing application with layer support, laye
 ## Features
 
 ### Drawing Tools
-- **Brush (B)** — Freehand drawing with adjustable size and opacity. Automatically converts strokes into optimized bezier curves (RDP simplification + Catmull-Rom handle fitting) for fewer points and smoother results.
+- **Brush (B)** — Freehand drawing with adjustable size and opacity. Automatically converts strokes into optimized bezier curves (RDP simplification + Catmull-Rom handle fitting) for fewer points and smoother results. When a brush stroke's start or end point is within half the brush width of another brush stroke's start or end (same color and size), the two are automatically merged into a single continuous path with re-fitted bezier curves.
 - **Pen (P)** — Click to place points one by one, creating a manual path. Finalize with Enter, double-click, or tool switch. Right-click removes the last point (or cancels if only one point). Paths are NOT curve-fitted on completion — all points remain Corner type for precise control.
 - **Rectangle (R)** — Draw rectangles with stroke.
 - **Circle (C)** — Draw ellipses and circles.
