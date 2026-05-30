@@ -1985,7 +1985,7 @@ class DrawingApp {
                 }
             } else if (this.currentStroke) {
                 const last = this.currentStroke.points[this.currentStroke.points.length - 1];
-                if (!last || this.dist(coords.x, coords.y, last.x, last.y) >= 1) {
+                if (!last || this.dist(coords.x, coords.y, last.x, last.y) >= 1 / (this.zoom * this.zoom)) {
                     this.currentStroke.points.push({ x: coords.x, y: coords.y });
                 }
             }
