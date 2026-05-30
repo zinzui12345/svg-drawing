@@ -7590,25 +7590,6 @@ ${svgContent}
         const pointIdx = this.hitTestPathPoint(coords.x, coords.y);
 
         if (pointIdx >= 0) {
-            if (e.detail === 2) {
-                this.saveState();
-                this.editingPathCmd.points.splice(pointIdx, 1);
-                if (this._editingRingEnds) {
-                    for (let ri = 0; ri < this._editingRingEnds.length; ri++) {
-                        if (pointIdx < this._editingRingEnds[ri]) this._editingRingEnds[ri]--;
-                    }
-                }
-                if (this.editingPathCmd.points.length === 0) {
-                    this.exitPathEditMode();
-                    this.viewportRender();
-                    return true;
-                }
-                this.selectedPointIndex = Math.min(pointIdx, this.editingPathCmd.points.length - 1);
-                this.viewportRender();
-                this.updatePointTypeSelect();
-                return true;
-            }
-
             this.saveState();
             this.selectedPointIndex = pointIdx;
             this.isDraggingPoint = true;

@@ -10,7 +10,7 @@ A lightweight, browser-based vector drawing application with layer support, laye
 - **Rectangle (R)** — Draw rectangles with stroke.
 - **Circle (C)** — Draw ellipses and circles.
 - **Fill (F)** — Flood fill tool that creates closed paths with fill color. Automatically expands boundaries to avoid gaps with stroked objects.
-- **Eraser (E)** — Erase parts of objects on selected layers with a freehand stroke. Uses polygon boolean subtraction (via PolyBool) to cut holes or trim shapes. Supports round lineCap and lineJoin for smooth results. For stroke paths, eraser splits the path into separate stroke objects instead of converting to fill outlines, preserving bezier curves via de Casteljau subdivision. Hidden when using Select tool with an active selection to avoid conflicts with path edit mode (E).
+- **Eraser (E)** — Erase parts of objects on selectable layers with a freehand stroke. Uses polygon boolean subtraction (via PolyBool) to cut holes or trim shapes. Supports round lineCap and lineJoin for smooth results. For stroke paths, eraser splits the path into separate stroke objects instead of converting to fill outlines, preserving bezier curves via de Casteljau subdivision. Hidden when using Select tool with an active selection to avoid conflicts with path edit mode (E).
 
 ### Selection & Manipulation
 - **Select Tool (V)** — Click to select, drag for rectangular selection. Supports:
@@ -32,7 +32,7 @@ A lightweight, browser-based vector drawing application with layer support, laye
 - **Toggle Path Edit (E)** — Enter/exit path edit mode to modify individual points on brush strokes and closed paths. All rings (outer + holes) are editable as a flat point list.
 - **Point Types** — Set point type to Corner, Smooth, or Symmetric via dropdown. Smooth handles move independently; Symmetric mirrors handles.
 - **Add Point** — Click on a path segment to insert a new point within the correct ring.
-- **Delete Point** — Remove selected points from the path.
+- **Delete Point** — Select a point then press Delete/Backspace, or use the Delete Point button.
 
 ### Layers
 - **Add / Delete** layers. New layers are inserted above the currently selected layer and inherit the parent folder of the selected layer.
