@@ -797,14 +797,14 @@ class DrawingApp {
         vpCtx.fillStyle = '#ffffff';
         vpCtx.fillRect(0, 0, this.canvasWidth, this.canvasHeight);
 
-        const dimOther = this.currentTool === 'select' || this.currentTool === 'fill';
+        const dimOther = this.currentTool === 'select' || this.currentTool === 'fill' || this.currentTool === 'eraser';
 
         for (let i = this.layers.length - 1; i >= 0; i--) {
             const layer = this.layers[i];
             if (!layer.visible || layer.type === 'folder') continue;
 
             let alpha = layer.opacity;
-            if (this.currentTool === 'select' ? layer.selectable === false : (this.currentTool === 'fill' && layer.selectable === false)) alpha *= 0.5;
+            if (this.currentTool === 'select' ? layer.selectable === false : ((this.currentTool === 'fill' || this.currentTool === 'eraser') && layer.selectable === false)) alpha *= 0.5;
 
             for (const cmd of layer.vectorCommands || []) {
                 vpCtx.globalAlpha = alpha * (cmd.opacity || 1);
@@ -2289,14 +2289,14 @@ class DrawingApp {
         const scaleY = h / this.canvasHeight;
         ctx.scale(scaleX, scaleY);
 
-        const dimOther = this.currentTool === 'select' || this.currentTool === 'fill';
+        const dimOther = this.currentTool === 'select' || this.currentTool === 'fill' || this.currentTool === 'eraser';
 
         for (let i = this.layers.length - 1; i >= 0; i--) {
             const layer = this.layers[i];
             if (!layer.visible || layer.type === 'folder') continue;
 
             let alpha = layer.opacity;
-            if (this.currentTool === 'select' ? layer.selectable === false : (this.currentTool === 'fill' && layer.selectable === false)) alpha *= 0.5;
+            if (this.currentTool === 'select' ? layer.selectable === false : ((this.currentTool === 'fill' || this.currentTool === 'eraser') && layer.selectable === false)) alpha *= 0.5;
 
             for (const cmd of layer.vectorCommands || []) {
                 ctx.globalAlpha = alpha * (cmd.opacity !== undefined ? cmd.opacity : 1);
