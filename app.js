@@ -7071,12 +7071,19 @@ ${svgContent}
         if (!this.pathEditMode || this.selectedPointIndex < 0 || !this.editingPathCmd) return;
 
         this.saveState();
-        this.editingPathCmd.points.splice(this.selectedPointIndex, 1);
+        const idx = this.selectedPointIndex;
+        this.editingPathCmd.points.splice(idx, 1);
+
+        if (this._editingRingEnds) {
+            for (let ri = 0; ri < this._editingRingEnds.length; ri++) {
+                if (idx < this._editingRingEnds[ri]) this._editingRingEnds[ri]--;
+            }
+        }
 
         if (this.editingPathCmd.points.length === 0) {
             this.exitPathEditMode();
         } else {
-            this.selectedPointIndex = Math.min(this.selectedPointIndex, this.editingPathCmd.points.length - 1);
+            this.selectedPointIndex = Math.min(idx, this.editingPathCmd.points.length - 1);
         }
 
         this.viewportRender();
