@@ -35,7 +35,7 @@ body {
 .toolbar {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: unset;
     padding: 0 12px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
@@ -48,10 +48,14 @@ body {
     display: flex;
     align-items: center;
     gap: 4px;
-    padding-right: 12px;
+    padding-left: 6px;
+    padding-right: 6px;
     border-right: 1px solid var(--border);
 }
 
+.tool-group:first-child {
+    padding-left: unset;
+}
 .tool-group:last-child {
     border-right: none;
 }
@@ -376,13 +380,12 @@ input.spinbox:focus {
 .shape-list {
     display: flex;
     gap: 6px;
-    margin-bottom: 8px;
     flex-wrap: wrap;
 }
 
 .shape-item {
-    width: 48px;
-    height: 48px;
+    width: 32px;
+    height: 32px;
     display: flex;
     align-items: center;
     justify-content: center;

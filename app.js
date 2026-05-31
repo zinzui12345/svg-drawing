@@ -2357,7 +2357,7 @@ class DrawingApp {
         }
         const brushShapeSection = document.getElementById('brushShapeSection');
         if (brushShapeSection) {
-            brushShapeSection.style.display = tool === 'brush' ? 'block' : 'none';
+            brushShapeSection.style.display = tool === 'brush' ? 'flex' : 'none';
         }
         this.viewportRender();
     }
