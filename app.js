@@ -98,6 +98,7 @@ class DrawingApp {
         this.panY = 0;
         this.viewportRotation = 0;
         this.fitCanvasToContainer();
+        this.initOrderSlider();
         this.addLayer('Layer 1');
         this.setupEventListeners();
         this.loadShapes();
@@ -2373,6 +2374,7 @@ class DrawingApp {
         this.resizeStartLocalDims = null;
         this.selectionRotation = 0;
         this.updateDeleteButton();
+        this.updateOrderSlider();
         this.syncColorPickerToSelection();
         this.syncFillTypeToSelection();
         this.viewportRender();
@@ -2886,6 +2888,7 @@ class DrawingApp {
     }
 
     updateSelectionBBox() {
+        this.updateOrderSlider();
         if (this.selectedCommands.length === 0) {
             this.selectionBBox = null;
             return;
@@ -7655,6 +7658,55 @@ ${svgContent}
         this.isDraggingPoint = false;
         this.lastPathPoint = null;
         this.draggedHandle = null;
+    }
+
+    initOrderSlider() {
+        this.orderSlider = document.getElementById('orderSlider');
+        this.orderCurrent = document.getElementById('orderCurrent');
+        this.orderTotal = document.getElementById('orderTotal');
+        this.orderControls = document.getElementById('orderControls');
+
+        this.orderSlider.addEventListener('input', () => {
+            this.reorderSelectedTo(this.orderSlider.valueAsNumber);
+        });
+    }
+
+    updateOrderSlider() {
+        if (!this.orderControls) return;
+        if (this.selectedIndices.length !== 1 || this.pathEditMode) {
+            this.orderControls.style.display = 'none';
+            return;
+        }
+        const cmds = this.layers[this.activeLayerIndex].vectorCommands;
+        const total = cmds.length;
+        if (total < 2) {
+            this.orderControls.style.display = 'none';
+            return;
+        }
+        const idx = this.selectedIndices[0];
+        const pos = total - idx;
+        this.orderSlider.max = total;
+        this.orderSlider.value = pos;
+        this.orderCurrent.textContent = pos;
+        this.orderTotal.textContent = total;
+        this.orderControls.style.display = 'block';
+    }
+
+    reorderSelectedTo(pos) {
+        if (this.selectedIndices.length !== 1) return;
+        const cmds = this.layers[this.activeLayerIndex].vectorCommands;
+        const total = cmds.length;
+        const targetIdx = total - pos;
+        const currentIdx = this.selectedIndices[0];
+        if (currentIdx === targetIdx) return;
+        this.saveState();
+        const [cmd] = cmds.splice(currentIdx, 1);
+        cmds.splice(targetIdx, 0, cmd);
+        this.selectedIndices = [targetIdx];
+        this.selectedCommands = [cmd];
+        this.updateSelectionBBox();
+        this.updateDeleteButton();
+        this.viewportRender();
     }
 }
 

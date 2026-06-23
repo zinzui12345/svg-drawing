@@ -97,7 +97,7 @@ body {
 
 input[type="range"] {
     width: 80px;
-    height: 4px;
+    height: unset;
     -webkit-appearance: none;
     background: var(--bg-tertiary);
     border-radius: 2px;
@@ -157,6 +157,7 @@ input.spinbox:focus {
     display: flex;
     flex: 1;
     overflow: hidden;
+    position: relative;
 }
 
 .canvas-container {
@@ -184,6 +185,18 @@ input.spinbox:focus {
     display: flex;
     flex-direction: column;
     padding: 12px;
+}
+
+.toolbar-panel {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 10;
+    background: rgba(30, 30, 30, 0.5);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    overflow-y: auto;
 }
 
 .panel-header h3 {
@@ -472,4 +485,38 @@ input.spinbox:focus {
 
 ::-webkit-scrollbar-thumb:hover {
     background: var(--bg-hover);
+}
+
+.order-controls {
+    padding: 8px;
+    height: 100%;
+}
+
+.order-slider-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    height: 50%;
+}
+
+.order-slider-wrapper input[type="range"] {
+    writing-mode: vertical-lr;
+    appearance: none;
+    width: 24px;
+    height: 100%;
+    cursor: pointer;
+    accent-color: var(--accent);
+}
+
+.order-label-top,
+.order-label-bottom {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-weight: 600;
+    min-width: 20px;
+    text-align: center;
+}
+.order-label-top {
+    color: var(--text-primary);
 }

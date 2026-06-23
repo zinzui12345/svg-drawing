@@ -6,14 +6,7 @@
     <title>SVG Drawing</title>
     <!-- 
         TODO:
-            slider vertikal penunjuk posisi urutan objek
-            - slider hanya visible saat ada objek yang di-select
-            - fungsi seperti pada Live2D Cubism Editor
-            - jumlah urutan berdasarkan jumlah objek pada layer aktif (layer yang dipilih)
-            - posisi slider otomatis update ketika memilih objek atau memindah urutan objek
-
             revisi layout antarmuka
-            - pindahkan brush shape
             - buat toolbar khusus untuk kontrol viewport zoom dan rotate
             - pindahkan stroke size dan object opacity
     -->
@@ -132,6 +125,19 @@
         </header>
 
         <div class="main-content">
+            <aside class="toolbar-panel">
+                <div class="order-controls" id="orderControls" style="display:none;">
+                    <div class="panel-header" style="margin-top: 10px;">
+                        <h3>Order</h3>
+                    </div>
+                    <div class="order-slider-wrapper">
+                        <span class="order-label-top" id="orderCurrent">1</span>
+                        <input type="range" id="orderSlider" min="1" max="1" value="1" orient="vertical">
+                        <span class="order-label-bottom" id="orderTotal">1</span>
+                    </div>
+                </div>
+            </aside>
+
             <div class="canvas-container" id="canvasContainer">
                 <canvas id="viewportCanvas"></canvas>
             </div>
