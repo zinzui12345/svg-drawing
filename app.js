@@ -189,11 +189,11 @@ class DrawingApp {
     }
 
     setupEventListeners() {
-        this.viewportCanvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
-        this.viewportCanvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
-        this.viewportCanvas.addEventListener('mouseup', (e) => this.handleMouseUp(e));
-        this.viewportCanvas.addEventListener('mouseleave', (e) => this.handleMouseLeave(e));
-        this.viewportCanvas.addEventListener('mouseenter', (e) => this.handleMouseEnter(e));
+        this.viewportCanvas.addEventListener('pointerdown', (e) => this.handleMouseDown(e));
+        this.viewportCanvas.addEventListener('pointermove', (e) => this.handleMouseMove(e));
+        this.viewportCanvas.addEventListener('pointerup', (e) => this.handleMouseUp(e));
+        this.viewportCanvas.addEventListener('pointerleave', (e) => this.handleMouseLeave(e));
+        this.viewportCanvas.addEventListener('pointerenter', (e) => this.handleMouseEnter(e));
         this.viewportCanvas.addEventListener('dblclick', (e) => this.handleDoubleClick(e));
         document.addEventListener('wheel', (e) => this.handleWheel(e), { passive: false });
         this.viewportCanvas.addEventListener('contextmenu', (e) => {
@@ -218,7 +218,7 @@ class DrawingApp {
                 }
             }
         });
-        this.viewportCanvas.addEventListener('mousedown', (e) => this.handleContainerMouseDown(e));
+        this.viewportCanvas.addEventListener('pointerdown', (e) => this.handleContainerMouseDown(e));
 
         document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -1242,6 +1242,7 @@ class DrawingApp {
             this._constrainShape = e.ctrlKey || e.metaKey;
         } else if (this.currentTool === 'brush') {
             this.saveState();
+            const p = e.pressure || 0.5;
             if (this.brushShape === 'star') {
                 this.currentStar = {
                     points: [{ x: coords.x, y: coords.y }],
@@ -1255,7 +1256,7 @@ class DrawingApp {
                     color: this.brushColor,
                     size: this.brushSize,
                     opacity: this.brushOpacity,
-                    points: [{ x: coords.x, y: coords.y }],
+                    points: [{ x: coords.x, y: coords.y, p }],
                     lineCap: this.brushLineCap,
                     lineJoin: this.brushLineJoin
                 };
@@ -1268,7 +1269,7 @@ class DrawingApp {
                 color: '#ff0000',
                 size: this.brushSize,
                 opacity: 0.5,
-                points: [{ x: coords.x, y: coords.y }],
+                points: [{ x: coords.x, y: coords.y, p: e.pressure || 0.5 }],
                 lineCap: 'round',
                 lineJoin: 'round'
             };
@@ -1987,7 +1988,7 @@ class DrawingApp {
             } else if (this.currentStroke) {
                 const last = this.currentStroke.points[this.currentStroke.points.length - 1];
                 if (!last || this.dist(coords.x, coords.y, last.x, last.y) >= 1 / (this.zoom * this.zoom)) {
-                    this.currentStroke.points.push({ x: coords.x, y: coords.y });
+                    this.currentStroke.points.push({ x: coords.x, y: coords.y, p: e.pressure || 0.5 });
                 }
             }
             this.lastX = coords.x;
@@ -2093,13 +2094,24 @@ class DrawingApp {
                 }
                 if (this.currentStroke.points.length === 1) {
                     const p = this.currentStroke.points[0];
-                    activeLayer.vectorCommands.push(
-                        this.brushShape === 'star'
-                            ? this.makeStarFill(p.x, p.y, this.brushSize)
-                            : this.makeSinglePointFill(p.x, p.y, this.brushSize)
-                    );
+                    if (p.p !== undefined && Math.abs(p.p - 0.5) > 0.05) {
+                        const fillCmd = this.pressureStrokeToFill(this.currentStroke, this.brushShape);
+                        if (fillCmd) activeLayer.vectorCommands.push(fillCmd);
+                    } else {
+                        activeLayer.vectorCommands.push(
+                            this.brushShape === 'star'
+                                ? this.makeStarFill(p.x, p.y, this.brushSize)
+                                : this.makeSinglePointFill(p.x, p.y, this.brushSize)
+                        );
+                    }
                 } else {
-                    activeLayer.vectorCommands.push(this.currentStroke);
+                    if (this.currentStroke.points.some(pp => pp.p !== undefined && Math.abs(pp.p - 0.5) > 0.05)) {
+                        const fillCmd = this.pressureStrokeToFill(this.currentStroke, this.brushShape);
+                        if (fillCmd) activeLayer.vectorCommands.push(fillCmd);
+                        else activeLayer.vectorCommands.push(this.currentStroke);
+                    } else {
+                        activeLayer.vectorCommands.push(this.currentStroke);
+                    }
                 }
             }
         }
@@ -2154,13 +2166,24 @@ class DrawingApp {
                     // merged into existing stroke
                 } else if (this.currentStroke.points.length === 1) {
                     const p = this.currentStroke.points[0];
-                    activeLayer.vectorCommands.push(
-                        this.brushShape === 'star'
-                            ? this.makeStarFill(p.x, p.y, this.brushSize)
-                            : this.makeSinglePointFill(p.x, p.y, this.brushSize)
-                    );
+                    if (p.p !== undefined && Math.abs(p.p - 0.5) > 0.05) {
+                        const fillCmd = this.pressureStrokeToFill(this.currentStroke, this.brushShape);
+                        if (fillCmd) activeLayer.vectorCommands.push(fillCmd);
+                    } else {
+                        activeLayer.vectorCommands.push(
+                            this.brushShape === 'star'
+                                ? this.makeStarFill(p.x, p.y, this.brushSize)
+                                : this.makeSinglePointFill(p.x, p.y, this.brushSize)
+                        );
+                    }
                 } else {
-                    activeLayer.vectorCommands.push(this.currentStroke);
+                    if (this.currentStroke.points.some(pp => pp.p !== undefined && Math.abs(pp.p - 0.5) > 0.05)) {
+                        const fillCmd = this.pressureStrokeToFill(this.currentStroke, this.brushShape);
+                        if (fillCmd) activeLayer.vectorCommands.push(fillCmd);
+                        else activeLayer.vectorCommands.push(this.currentStroke);
+                    } else {
+                        activeLayer.vectorCommands.push(this.currentStroke);
+                    }
                 }
             }
             if (this.currentStroke && this.currentStroke.type === 'eraser' && this.currentStroke.points.length > 0) {
@@ -3490,7 +3513,7 @@ class DrawingApp {
                 }
             }
             ctx.fillStyle = this.getFillStyle(ctx, cmd);
-            ctx.fill('evenodd');
+            ctx.fill(cmd.fillRule || 'evenodd');
         } else if (cmd.type === 'line') {
             ctx.strokeStyle = cmd.color;
             ctx.lineWidth = cmd.size;
@@ -4059,6 +4082,167 @@ class DrawingApp {
         return outline;
     }
 
+    pressureStrokeToFill(cmd, brushShape) {
+        const pts = cmd.points;
+        const hBrushSize = cmd.size / 2;
+        if (!pts || pts.length === 0) return null;
+
+        if (pts.length === 1) {
+            const p = pts[0];
+            const r = (p.p !== undefined ? p.p : 1) * cmd.size / 2;
+            if (brushShape === 'square') {
+                return {
+                    type: 'fill', color: cmd.color, opacity: cmd.opacity, fillRule: 'nonzero',
+                    points: [
+                        { x: p.x - r, y: p.y - r }, { x: p.x + r, y: p.y - r },
+                        { x: p.x + r, y: p.y + r }, { x: p.x - r, y: p.y + r },
+                        { x: p.x - r, y: p.y - r }
+                    ]
+                };
+            }
+            const segments = 24;
+            const fillPts = [];
+            for (let i = 0; i <= segments; i++) {
+                const a = (i / segments) * Math.PI * 2;
+                fillPts.push({ x: p.x + Math.cos(a) * r, y: p.y + Math.sin(a) * r });
+            }
+            return { type: 'fill', color: cmd.color, opacity: cmd.opacity, fillRule: 'nonzero', points: fillPts };
+        }
+
+        const flat = this.sampleStrokeWithPressure(pts);
+        if (!flat || flat.length < 2) return null;
+
+        const closed = cmd.closed;
+        const n = closed ? flat.length - 1 : flat.length;
+        if (n < 2) return null;
+
+        const left = [], right = [];
+        const MITER_LIMIT = 4;
+
+        for (let i = 0; i < n; i++) {
+            const p = flat[i];
+            const hw = Math.max((p.p !== undefined ? p.p : 1) * hBrushSize, 0.5);
+
+            const prev = closed ? flat[(i - 1 + n) % n] : (i > 0 ? flat[i - 1] : null);
+            const next = closed ? flat[(i + 1) % n] : (i < n - 1 ? flat[i + 1] : null);
+
+            let nx = 0, ny = 0;
+            if (prev && next) {
+                const dx1 = p.x - prev.x, dy1 = p.y - prev.y;
+                const dx2 = next.x - p.x, dy2 = next.y - p.y;
+                const len1 = Math.hypot(dx1, dy1), len2 = Math.hypot(dx2, dy2);
+                if (len1 < 0.001 && len2 < 0.001) { left.push({ ...p }); right.push({ ...p }); continue; }
+                if (len1 < 0.001) {
+                    nx = -dy2 / len2 * hw; ny = dx2 / len2 * hw;
+                } else if (len2 < 0.001) {
+                    nx = -dy1 / len1 * hw; ny = dx1 / len1 * hw;
+                } else {
+                    const n1x = -dy1 / len1, n1y = dx1 / len1;
+                    const n2x = -dy2 / len2, n2y = dx2 / len2;
+                    const dot = n1x * n2x + n1y * n2y;
+                    const denom = 1 + dot;
+                    if (denom < 0.001) { left.push({ ...p }); right.push({ ...p }); continue; }
+                    const scale = hw / denom;
+                    const mx = (n1x + n2x) * scale, my = (n1y + n2y) * scale;
+                    const miterLen = Math.hypot(mx, my);
+                    if (miterLen > hw * MITER_LIMIT) {
+                        const clampScale = hw * MITER_LIMIT / miterLen;
+                        nx = mx * clampScale; ny = my * clampScale;
+                    } else { nx = mx; ny = my; }
+                }
+            } else if (prev) {
+                const dx = p.x - prev.x, dy = p.y - prev.y;
+                const len = Math.hypot(dx, dy);
+                if (len >= 0.001) { nx = -dy / len * hw; ny = dx / len * hw; }
+            } else if (next) {
+                const dx = next.x - p.x, dy = next.y - p.y;
+                const len = Math.hypot(dx, dy);
+                if (len >= 0.001) { nx = -dy / len * hw; ny = dx / len * hw; }
+            }
+            left.push({ x: p.x + nx, y: p.y + ny });
+            right.push({ x: p.x - nx, y: p.y - ny });
+        }
+
+        // build complete outline with both end caps (no boolean union)
+        const outline = [right[0]];
+        for (let i = 1; i < n; i++) outline.push(right[i]);
+
+        if (!closed && brushShape !== 'square') {
+            const last = flat[n - 1];
+            const hwEnd = Math.max((last.p !== undefined ? last.p : 1) * hBrushSize, 0.5);
+            const dx = last.x - flat[n - 2].x, dy = last.y - flat[n - 2].y;
+            const len = Math.hypot(dx, dy);
+            if (len >= 0.001) {
+                const ux = dx / len, uy = dy / len, nxx = -uy, nyy = ux;
+                const segs = 10;
+                for (let j = 0; j <= segs; j++) {
+                    const a = -Math.PI / 2 - (j / segs) * Math.PI;
+                    outline.push({
+                        x: last.x + (-ux * Math.cos(a) + nxx * Math.sin(a)) * hwEnd,
+                        y: last.y + (-uy * Math.cos(a) + nyy * Math.sin(a)) * hwEnd
+                    });
+                }
+            } else {
+                outline.push({ x: left[n - 1].x, y: left[n - 1].y });
+            }
+        }
+
+        for (let i = n - 1; i >= 0; i--) outline.push(left[i]);
+
+        if (!closed && brushShape !== 'square') {
+            const first = flat[0];
+            const hw0 = Math.max((first.p !== undefined ? first.p : 1) * hBrushSize, 0.5);
+            const dx = flat[1].x - first.x, dy = flat[1].y - first.y;
+            const len = Math.hypot(dx, dy);
+            if (len >= 0.001) {
+                const ux = dx / len, uy = dy / len, nxx = -uy, nyy = ux;
+                const segs = 10;
+                for (let j = 0; j <= segs; j++) {
+                    const a = Math.PI / 2 - (j / segs) * Math.PI;
+                    outline.push({
+                        x: first.x + (-ux * Math.cos(a) + nxx * Math.sin(a)) * hw0,
+                        y: first.y + (-uy * Math.cos(a) + nyy * Math.sin(a)) * hw0
+                    });
+                }
+            }
+        }
+        outline.push({ x: outline[0].x, y: outline[0].y });
+
+        return { type: 'fill', color: cmd.color, opacity: cmd.opacity, fillRule: 'nonzero', points: outline };
+    }
+
+    sampleStrokeWithPressure(points) {
+        const result = [];
+        for (let i = 0; i < points.length; i++) {
+            const curr = points[i];
+            const next = i < points.length - 1 ? points[i + 1] : null;
+            if (i === 0) {
+                result.push({ x: curr.x, y: curr.y, p: curr.p !== undefined ? curr.p : 1 });
+            }
+            if (next && curr.cp2x !== undefined && next.cp1x !== undefined) {
+                const p0 = { x: curr.x, y: curr.y };
+                const p1 = { x: curr.cp2x, y: curr.cp2y };
+                const p2 = { x: next.cp1x, y: next.cp1y };
+                const p3 = { x: next.x, y: next.y };
+                const pStart = curr.p !== undefined ? curr.p : 1;
+                const pEnd = next.p !== undefined ? next.p : 1;
+                for (let s = 1; s < 8; s++) {
+                    const t = s / 8;
+                    const mt = 1 - t;
+                    result.push({
+                        x: mt*mt*mt*p0.x + 3*mt*mt*t*p1.x + 3*mt*t*t*p2.x + t*t*t*p3.x,
+                        y: mt*mt*mt*p0.y + 3*mt*mt*t*p1.y + 3*mt*t*t*p2.y + t*t*t*p3.y,
+                        p: pStart + (pEnd - pStart) * t
+                    });
+                }
+            }
+            if (next) {
+                result.push({ x: next.x, y: next.y, p: next.p !== undefined ? next.p : 1 });
+            }
+        }
+        return result;
+    }
+
     fillToPolygon(cmd) {
         const pts = cmd.points;
         if (!pts) return null;
@@ -4498,11 +4682,11 @@ class DrawingApp {
 
     fitBrushCurve(points) {
         if (points.length <= 2) {
-            return points.map(p => ({ x: p.x, y: p.y }));
+            return points.map(p => ({ x: p.x, y: p.y, p: p.p }));
         }
         const simplified = this.simplifyPoints(points, 2);
         if (simplified.length <= 2) {
-            return simplified.map(p => ({ x: p.x, y: p.y }));
+            return simplified.map(p => ({ x: p.x, y: p.y, p: p.p }));
         }
         const angleThreshold = 5;
         const isCorner = [];
@@ -4519,7 +4703,7 @@ class DrawingApp {
             const isStart = isCorner[i] && i < simplified.length - 1 && !isCorner[i + 1];
             const isEnd = isCorner[i] && i > 0 && !isCorner[i - 1];
             const isInterior = !isCorner[i];
-            const point = { x: p.x, y: p.y };
+            const point = { x: p.x, y: p.y, p: p.p };
             if (isInterior || isStart || isEnd) {
                 const prev = i > 0 ? simplified[i - 1] : { x: 2 * p.x - simplified[1].x, y: 2 * p.y - simplified[1].y };
                 const next = i < simplified.length - 1 ? simplified[i + 1] : { x: 2 * p.x - simplified[simplified.length - 2].x, y: 2 * p.y - simplified[simplified.length - 2].y };
@@ -5341,7 +5525,7 @@ class DrawingApp {
                             const key = JSON.stringify(cmd.gradient);
                             if (gradientMap.has(key)) fillAttr = `url(#${gradientMap.get(key)})`;
                         }
-                        svgParts.push(`${indent}  <path d="${d}" fill="${fillAttr}" stroke="none" opacity="${cmd.opacity}" fill-rule="evenodd"/>`);
+                        svgParts.push(`${indent}  <path d="${d}" fill="${fillAttr}" stroke="none" opacity="${cmd.opacity}" fill-rule="${cmd.fillRule || 'evenodd'}"/>`);
                     } else if (cmd.type === 'line') {
                         svgParts.push(`${indent}  <line x1="${cmd.x1.toFixed(2)}" y1="${cmd.y1.toFixed(2)}" x2="${cmd.x2.toFixed(2)}" y2="${cmd.y2.toFixed(2)}" stroke="${cmd.color}" stroke-width="${cmd.size}" stroke-linecap="${cmd.lineCap || 'round'}" stroke-linejoin="${cmd.lineJoin || 'round'}" opacity="${cmd.opacity}"/>`);
                     } else if (cmd.type === 'rect') {
