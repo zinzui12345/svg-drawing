@@ -18,6 +18,7 @@ A lightweight, browser-based vector drawing application with layer support, laye
   - **Resize** — Corner and edge handles for scaling objects (min 1px). Corner resize maintains aspect ratio. CTRL+edge handle also maintains aspect ratio.
   - **Rotate** — Rotation handle above the selection bounding box.
   - **Center Horizontal** / **Center Vertical** — Align selected objects to canvas center.
+- **Object Order** — When an object is selected, a vertical slider appears in the left toolbar panel showing its position (1 = bottom, N = top) within the active layer. Drag the slider to reorder the object forward or backward.
 - **Escape** or **Ctrl+Shift+A** — Deselect all objects.
 
 ### Gradient Fills
