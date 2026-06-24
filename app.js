@@ -50,6 +50,8 @@ class DrawingApp {
         this.mouseX = 0;
         this.mouseY = 0;
         this.mouseOnCanvas = false;
+        this.currentPointerType = 'mouse';
+        this.currentPressure = 0.5;
 
         this.currentStroke = null;
 
@@ -954,11 +956,65 @@ class DrawingApp {
         if (this.currentTool === 'brush') {
             if (this.currentStroke && this.currentStroke.points.length > 0) {
                 const pts = this.currentStroke.points;
+                const hasPressure = pts.some(p => p.p !== undefined && Math.abs(p.p - 0.5) > 0.05);
                 ctx.globalAlpha = this.currentStroke.opacity || 1;
                 if (pts.length < 2) {
+                    const r = hasPressure
+                        ? Math.max((pts[0].p !== undefined ? pts[0].p : 1) * this.currentStroke.size / 2, 0.5)
+                        : this.currentStroke.size / 2;
                     ctx.fillStyle = this.currentStroke.color;
                     ctx.beginPath();
-                    ctx.arc(pts[0].x, pts[0].y, this.currentStroke.size / 2, 0, Math.PI * 2);
+                    ctx.arc(pts[0].x, pts[0].y, r, 0, Math.PI * 2);
+                    ctx.fill();
+                } else if (hasPressure) {
+                    ctx.fillStyle = this.currentStroke.color;
+                    ctx.beginPath();
+                    if (this.brushShape === 'square') {
+                        const left = [];
+                        const right = [];
+                        for (let i = 0; i < pts.length; i++) {
+                            const p = pts[i];
+                            const hw = Math.max((p.p !== undefined ? p.p : 1) * this.currentStroke.size / 2, 0.5);
+                            let dx, dy, segLen;
+                            if (i < pts.length - 1) {
+                                dx = pts[i + 1].x - p.x;
+                                dy = pts[i + 1].y - p.y;
+                            } else {
+                                dx = p.x - pts[i - 1].x;
+                                dy = p.y - pts[i - 1].y;
+                            }
+                            segLen = Math.hypot(dx, dy);
+                            if (segLen < 0.001) { segLen = 0.001; }
+                            const ux = dx / segLen, uy = dy / segLen;
+                            left.push({ x: p.x + uy * hw, y: p.y - ux * hw });
+                            right.push({ x: p.x - uy * hw, y: p.y + ux * hw });
+                        }
+                        ctx.moveTo(left[0].x, left[0].y);
+                        for (let i = 1; i < left.length; i++) ctx.lineTo(left[i].x, left[i].y);
+                        for (let i = right.length - 1; i >= 0; i--) ctx.lineTo(right[i].x, right[i].y);
+                        ctx.closePath();
+                    } else {
+                        for (let i = 0; i < pts.length; i++) {
+                            const p = pts[i];
+                            const hw = Math.max((p.p !== undefined ? p.p : 1) * this.currentStroke.size / 2, 0.5);
+                            ctx.moveTo(p.x + hw, p.y);
+                            ctx.arc(p.x, p.y, hw, 0, Math.PI * 2);
+                            if (i > 0) {
+                                const prev = pts[i - 1];
+                                const phw = Math.max((prev.p !== undefined ? prev.p : 1) * this.currentStroke.size / 2, 0.5);
+                                const dx = p.x - prev.x, dy = p.y - prev.y;
+                                const segLen = Math.hypot(dx, dy);
+                                if (segLen > 0.001) {
+                                    const ux = dx / segLen, uy = dy / segLen;
+                                    ctx.moveTo(prev.x + uy * phw, prev.y - ux * phw);
+                                    ctx.lineTo(p.x + uy * hw, p.y - ux * hw);
+                                    ctx.lineTo(p.x - uy * hw, p.y + ux * hw);
+                                    ctx.lineTo(prev.x - uy * phw, prev.y + ux * phw);
+                                    ctx.closePath();
+                                }
+                            }
+                        }
+                    }
                     ctx.fill();
                 } else {
                     ctx.strokeStyle = this.currentStroke.color;
@@ -985,16 +1041,18 @@ class DrawingApp {
                     this.redrawCommand(ctx, fill);
                 }
             }
-            const radius = this.brushSize / 2;
+            const previewScale = this.currentPointerType === 'pen' ? (this.currentPressure || 1) : 1;
+            const previewSize = this.brushSize * previewScale;
+            const radius = previewSize / 2;
             ctx.strokeStyle = '#000000';
             ctx.lineWidth = 1;
             ctx.beginPath();
             if (this.brushShape === 'square') {
-                ctx.rect(this.mouseX - radius, this.mouseY - radius, this.brushSize, this.brushSize);
+                ctx.rect(this.mouseX - radius, this.mouseY - radius, previewSize, previewSize);
             } else if (this.brushShape === 'star') {
                 const pts = this.shapePolygons.star;
                 if (pts) {
-                    const scale = this.brushSize / 60;
+                    const scale = previewSize / 60;
                     ctx.moveTo(this.mouseX + pts[0].x * scale, this.mouseY + pts[0].y * scale);
                     for (let i = 1; i < pts.length; i++) {
                         ctx.lineTo(this.mouseX + pts[i].x * scale, this.mouseY + pts[i].y * scale);
@@ -1207,6 +1265,8 @@ class DrawingApp {
     handleMouseDown(e) {
         if (e.button !== 0) return;
         const coords = this.getCanvasCoordinates(e);
+        this.currentPointerType = e.pointerType || 'mouse';
+        this.currentPressure = e.pressure || 0.5;
 
         if (this.pathEditMode) {
             this.handlePathEditMouseDown(e, coords);
@@ -1921,6 +1981,8 @@ class DrawingApp {
         const coords = this.getCanvasCoordinates(e);
         this.mouseX = coords.x;
         this.mouseY = coords.y;
+        this.currentPointerType = e.pointerType || 'mouse';
+        this.currentPressure = e.pressure || 0.5;
         if (this.isDrawing && ['rect', 'circle'].includes(this.currentTool)) {
             this._constrainShape = e.ctrlKey || e.metaKey;
         }
@@ -2088,13 +2150,18 @@ class DrawingApp {
             if (this.currentStroke.points.length >= 2 && this.tryMergeStroke(this.currentStroke, activeLayer)) {
                 // merged into existing stroke, skip further processing
             } else {
-                this.currentStroke.points = this.simplifyCollinearPoints(this.currentStroke.points);
-                if (this.currentStroke.points.length > 2) {
-                    this.currentStroke.points = this.fitBrushCurve(this.currentStroke.points);
+                const hasPressure = this.currentStroke.points.some(pp => pp.p !== undefined && Math.abs(pp.p - 0.5) > 0.05);
+                if (hasPressure) {
+                    this.currentStroke.points = this.fitBrushCurvePreservePressure(this.currentStroke.points);
+                } else {
+                    this.currentStroke.points = this.simplifyCollinearPoints(this.currentStroke.points);
+                    if (this.currentStroke.points.length > 2) {
+                        this.currentStroke.points = this.fitBrushCurve(this.currentStroke.points);
+                    }
                 }
                 if (this.currentStroke.points.length === 1) {
                     const p = this.currentStroke.points[0];
-                    if (p.p !== undefined && Math.abs(p.p - 0.5) > 0.05) {
+                    if (hasPressure) {
                         const fillCmd = this.pressureStrokeToFill(this.currentStroke, this.brushShape);
                         if (fillCmd) activeLayer.vectorCommands.push(fillCmd);
                     } else {
@@ -2105,7 +2172,7 @@ class DrawingApp {
                         );
                     }
                 } else {
-                    if (this.currentStroke.points.some(pp => pp.p !== undefined && Math.abs(pp.p - 0.5) > 0.05)) {
+                    if (hasPressure) {
                         const fillCmd = this.pressureStrokeToFill(this.currentStroke, this.brushShape);
                         if (fillCmd) activeLayer.vectorCommands.push(fillCmd);
                         else activeLayer.vectorCommands.push(this.currentStroke);
@@ -2164,25 +2231,36 @@ class DrawingApp {
                 this.saveState();
                 if (this.currentStroke.points.length >= 2 && this.tryMergeStroke(this.currentStroke, activeLayer)) {
                     // merged into existing stroke
-                } else if (this.currentStroke.points.length === 1) {
-                    const p = this.currentStroke.points[0];
-                    if (p.p !== undefined && Math.abs(p.p - 0.5) > 0.05) {
-                        const fillCmd = this.pressureStrokeToFill(this.currentStroke, this.brushShape);
-                        if (fillCmd) activeLayer.vectorCommands.push(fillCmd);
-                    } else {
-                        activeLayer.vectorCommands.push(
-                            this.brushShape === 'star'
-                                ? this.makeStarFill(p.x, p.y, this.brushSize)
-                                : this.makeSinglePointFill(p.x, p.y, this.brushSize)
-                        );
-                    }
                 } else {
-                    if (this.currentStroke.points.some(pp => pp.p !== undefined && Math.abs(pp.p - 0.5) > 0.05)) {
-                        const fillCmd = this.pressureStrokeToFill(this.currentStroke, this.brushShape);
-                        if (fillCmd) activeLayer.vectorCommands.push(fillCmd);
-                        else activeLayer.vectorCommands.push(this.currentStroke);
+                    const hasPressure = this.currentStroke.points.some(pp => pp.p !== undefined && Math.abs(pp.p - 0.5) > 0.05);
+                    if (hasPressure) {
+                        this.currentStroke.points = this.fitBrushCurvePreservePressure(this.currentStroke.points);
                     } else {
-                        activeLayer.vectorCommands.push(this.currentStroke);
+                        this.currentStroke.points = this.simplifyCollinearPoints(this.currentStroke.points);
+                        if (this.currentStroke.points.length > 2) {
+                            this.currentStroke.points = this.fitBrushCurve(this.currentStroke.points);
+                        }
+                    }
+                    if (this.currentStroke.points.length === 1) {
+                        const p = this.currentStroke.points[0];
+                        if (hasPressure) {
+                            const fillCmd = this.pressureStrokeToFill(this.currentStroke, this.brushShape);
+                            if (fillCmd) activeLayer.vectorCommands.push(fillCmd);
+                        } else {
+                            activeLayer.vectorCommands.push(
+                                this.brushShape === 'star'
+                                    ? this.makeStarFill(p.x, p.y, this.brushSize)
+                                    : this.makeSinglePointFill(p.x, p.y, this.brushSize)
+                            );
+                        }
+                    } else {
+                        if (hasPressure) {
+                            const fillCmd = this.pressureStrokeToFill(this.currentStroke, this.brushShape);
+                            if (fillCmd) activeLayer.vectorCommands.push(fillCmd);
+                            else activeLayer.vectorCommands.push(this.currentStroke);
+                        } else {
+                            activeLayer.vectorCommands.push(this.currentStroke);
+                        }
                     }
                 }
             }
@@ -2783,6 +2861,7 @@ class DrawingApp {
                                 type: 'fill',
                                 color: cmd.color || '#000',
                                 opacity: cmd.opacity !== undefined ? cmd.opacity : 1,
+                                fillRule: cmd.fillRule,
                                 points: { outer: group.outer, holes: group.holes || [] }
                             };
                             if (cmd.fillType && cmd.gradient) {
@@ -4208,7 +4287,39 @@ class DrawingApp {
         }
         outline.push({ x: outline[0].x, y: outline[0].y });
 
-        return { type: 'fill', color: cmd.color, opacity: cmd.opacity, fillRule: 'nonzero', points: outline };
+        // Build clean (non-self-intersecting) polygon for boolean operations.
+        // Union all per-segment quads using a single PolyBool pass.
+        // Snap coordinates to 0.1px precision to help PolyBool handle
+        // near-coincident edges between adjacent quads.
+        const snap = 10; // 0.1px snap
+        const s = (v) => Math.round(v * snap) / snap;
+        const allQuads = [];
+        for (let i = 0; i < flat.length - 1; i++) {
+            const a = flat[i], b = flat[i + 1];
+            const hw_a = Math.max((a.p !== undefined ? a.p : 1) * hBrushSize, 0.5);
+            const hw_b = Math.max((b.p !== undefined ? b.p : 1) * hBrushSize, 0.5);
+            const dx = b.x - a.x, dy = b.y - a.y;
+            const len = Math.hypot(dx, dy);
+            if (len < 0.5) continue;
+            const nx = -dy / len, ny = dx / len;
+            allQuads.push([
+                { x: s(a.x + nx * hw_a), y: s(a.y + ny * hw_a) },
+                { x: s(b.x + nx * hw_b), y: s(b.y + ny * hw_b) },
+                { x: s(b.x - nx * hw_b), y: s(b.y - ny * hw_b) },
+                { x: s(a.x - nx * hw_a), y: s(a.y - ny * hw_a) }
+            ]);
+        }
+        let cleanRegions = null;
+        if (allQuads.length > 0) {
+            try {
+                cleanRegions = PolyBool.polygon(PolyBool.segments({ regions: allQuads, inverted: false }));
+            } catch (e) {
+                console.warn('clean polygon union failed, using quads directly:', e);
+                cleanRegions = { regions: allQuads, inverted: false };
+            }
+        }
+
+        return { type: 'fill', color: cmd.color, opacity: cmd.opacity, fillRule: 'nonzero', points: outline, _cleanRegions: cleanRegions ? cleanRegions.regions : null };
     }
 
     sampleStrokeWithPressure(points) {
@@ -4282,6 +4393,9 @@ class DrawingApp {
                     if (hole.length >= 3) regions.push(sampleRing(hole));
                 }
             }
+        }
+        if (cmd._cleanRegions && cmd._cleanRegions.length > 0) {
+            regions = cmd._cleanRegions.map(r => r.map(p => ({ x: p.x, y: p.y })));
         }
         return regions.length > 0 ? { regions, inverted: false } : null;
     }
@@ -4729,6 +4843,40 @@ class DrawingApp {
                     } else {
                         point.type = 'smooth';
                     }
+                }
+            }
+            result.push(point);
+        }
+        return result;
+    }
+
+    fitBrushCurvePreservePressure(points) {
+        if (points.length <= 2) {
+            return points.map(p => ({ x: p.x, y: p.y, p: p.p }));
+        }
+        const result = [];
+        for (let i = 0; i < points.length; i++) {
+            const p = points[i];
+            const prev = i > 0 ? points[i - 1] : { x: 2 * p.x - points[1].x, y: 2 * p.y - points[1].y };
+            const next = i < points.length - 1 ? points[i + 1] : { x: 2 * p.x - points[points.length - 2].x, y: 2 * p.y - points[points.length - 2].y };
+            const point = { x: p.x, y: p.y, p: p.p };
+            if (i > 0) {
+                point.cp1x = p.x - (next.x - prev.x) / 6;
+                point.cp1y = p.y - (next.y - prev.y) / 6;
+            }
+            if (i < points.length - 1) {
+                point.cp2x = p.x + (next.x - prev.x) / 6;
+                point.cp2y = p.y + (next.y - prev.y) / 6;
+            }
+            if (i > 0 && i < points.length - 1) {
+                const dx1 = point.cp1x - p.x, dy1 = point.cp1y - p.y;
+                const dx2 = point.cp2x - p.x, dy2 = point.cp2y - p.y;
+                const len1 = Math.hypot(dx1, dy1);
+                const len2 = Math.hypot(dx2, dy2);
+                if (len1 > 0 && len2 > 0 && Math.abs(len1 - len2) < 0.01 && Math.abs(dx1 * dx2 + dy1 * dy2 + len1 * len2) < 0.01) {
+                    point.type = 'symmetric';
+                } else {
+                    point.type = 'smooth';
                 }
             }
             result.push(point);
