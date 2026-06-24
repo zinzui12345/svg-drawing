@@ -2820,12 +2820,33 @@ class DrawingApp {
         const eraserPolys = this.brushToPolygon(eraserCmd);
         if (!eraserPolys || !eraserPolys.regions || eraserPolys.regions.length === 0) return;
 
+        // Eraser bounding box for quick overlap check
+        let erMinX = Infinity, erMinY = Infinity, erMaxX = -Infinity, erMaxY = -Infinity;
+        for (const ring of eraserPolys.regions) {
+            for (const p of ring) {
+                if (p.x < erMinX) erMinX = p.x;
+                if (p.y < erMinY) erMinY = p.y;
+                if (p.x > erMaxX) erMaxX = p.x;
+                if (p.y > erMaxY) erMaxY = p.y;
+            }
+        }
+
         for (const layer of this.layers) {
             if (layer.selectable === false || !layer.vectorCommands) continue;
             const cmds = layer.vectorCommands;
             const newCmds = [];
 
             for (const cmd of cmds) {
+                // Skip commands that don't overlap with eraser
+                const cmdBBox = this.getCommandBBox(cmd);
+                if (cmdBBox) {
+                    if (cmdBBox.maxX < erMinX || cmdBBox.minX > erMaxX ||
+                        cmdBBox.maxY < erMinY || cmdBBox.minY > erMaxY) {
+                        newCmds.push(cmd);
+                        continue;
+                    }
+                }
+
                 if (cmd.type === 'brush' && cmd.lineCap && cmd.lineJoin && cmd.size) {
                     const cut = this._cutStrokeByEraser(cmd, eraserPolys.regions);
                     if (cut) {
@@ -4387,8 +4408,24 @@ class DrawingApp {
         if (Array.isArray(pts)) {
             if (pts.length >= 3) regions.push(sampleRing(pts));
         } else {
-            if (pts.outer && pts.outer.length >= 3) regions.push(sampleRing(pts.outer));
-            if (pts.holes) {
+            if (pts.outer && pts.outer.length >= 3) {
+                const outerSampled = sampleRing(pts.outer);
+                if (pts.holes && pts.holes.length > 0) {
+                    let poly = { regions: [outerSampled], inverted: false };
+                    for (const hole of pts.holes) {
+                        if (hole.length >= 3) {
+                            try {
+                                poly = this._fromPb(
+                                    PolyBool.difference(this._toPb(poly), this._toPb({ regions: [sampleRing(hole)], inverted: false }))
+                                );
+                            } catch (e) {}
+                        }
+                    }
+                    regions.push(...poly.regions);
+                } else {
+                    regions.push(outerSampled);
+                }
+            } else if (pts.holes) {
                 for (const hole of pts.holes) {
                     if (hole.length >= 3) regions.push(sampleRing(hole));
                 }
